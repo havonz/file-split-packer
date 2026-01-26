@@ -42,8 +42,7 @@ jobs:
         if: matrix.os == 'macos-latest'
         run: |
           mkdir -p dist
-          cd src-tauri/target/universal-apple-darwin/release/bundle/macos
-          ditto -c -k --sequesterRsrc --keepParent "File Split Packer.app" "../../../dist/file-split-packer-macos-universal.app.zip"
+          ditto -c -k --sequesterRsrc --keepParent "src-tauri/target/universal-apple-darwin/release/bundle/macos/File Split Packer.app" "$GITHUB_WORKSPACE/dist/file-split-packer-macos-universal.app.zip"
 
       - name: Build Windows exe
         if: matrix.os == 'windows-latest'
