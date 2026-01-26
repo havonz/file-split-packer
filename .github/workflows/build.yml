@@ -10,7 +10,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, windows-latest, ubuntu-latest]
+        os: [macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
 
     steps:
@@ -30,12 +30,30 @@ jobs:
       - name: Install deps
         run: pnpm install
 
-      - name: Build (no bundle)
+      - name: Build macOS app bundle
+        if: matrix.os == 'macos-latest'
+        run: pnpm tauri build --bundles app --target universal-apple-darwin
+
+      - name: Package macOS .app
+        if: matrix.os == 'macos-latest'
+        run: |
+          mkdir -p dist
+          cd src-tauri/target/universal-apple-darwin/release/bundle/macos
+          ditto -c -k --sequesterRsrc --keepParent "File Split Packer.app" "../../../dist/file-split-packer-macos-universal.app.zip"
+
+      - name: Build Windows exe
+        if: matrix.os == 'windows-latest'
         run: pnpm tauri build --no-bundle
+
+      - name: Package Windows zip
+        if: matrix.os == 'windows-latest'
+        shell: powershell
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Compress-Archive -Path "src-tauri/target/release/file-split-packer.exe" -DestinationPath "dist/file-split-packer-windows.zip" -Force
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: file-split-packer-${{ matrix.os }}
-          path: |
-            src-tauri/target/release/file-split-packer*
+          path: dist/*.zip
