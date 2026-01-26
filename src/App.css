@@ -1,0 +1,274 @@
+:root {
+  font-family: "IBM Plex Sans", "Noto Sans SC", "Segoe UI", sans-serif;
+  color: #0d1117;
+  background-color: #f4f6fb;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: radial-gradient(circle at top, #fdf7e7, #e9edf9 35%, #f6f7fb 70%);
+}
+
+#root {
+  min-height: 100vh;
+}
+
+.app-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  padding: 32px 24px 56px;
+  max-width: 1100px;
+  margin: 0 auto;
+}
+
+.hero {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 24px;
+  align-items: center;
+  justify-content: space-between;
+  background: linear-gradient(120deg, #fef0d7 0%, #e9f1ff 60%, #f6f7fb 100%);
+  border-radius: 24px;
+  padding: 28px 32px;
+  box-shadow: 0 18px 45px rgba(45, 63, 97, 0.12);
+}
+
+.eyebrow {
+  text-transform: uppercase;
+  letter-spacing: 0.24em;
+  font-weight: 700;
+  color: #d26f3d;
+  margin: 0 0 8px;
+}
+
+h1 {
+  font-size: clamp(1.6rem, 2.4vw, 2.6rem);
+  margin: 0 0 8px;
+}
+
+.lead {
+  margin: 0;
+  color: #3c4a5f;
+  max-width: 520px;
+}
+
+
+.grid {
+  display: grid;
+  gap: 20px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.card {
+  background: #ffffff;
+  border-radius: 18px;
+  padding: 18px;
+  box-shadow: 0 12px 30px rgba(36, 52, 80, 0.08);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 220px;
+}
+
+.card.accent {
+  background: linear-gradient(130deg, #0d1117, #152338);
+  color: #fefefe;
+}
+
+.card.accent .primary {
+  background: #f5b277;
+  color: #1d1f22;
+}
+
+.card h2 {
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.field.dual {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+}
+
+label {
+  font-weight: 600;
+  color: inherit;
+}
+
+.path-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 10px;
+}
+
+input,
+select,
+button {
+  font: inherit;
+  border-radius: 12px;
+  border: 1px solid #d8dee8;
+  padding: 10px 12px;
+}
+
+input[readonly] {
+  background: #f3f5f9;
+  color: #4b5a73;
+}
+
+button {
+  cursor: pointer;
+  background: #ffffff;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+button:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 8px 20px rgba(25, 35, 52, 0.12);
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+  transform: none;
+  box-shadow: none;
+}
+
+.primary {
+  font-weight: 700;
+  background: #0d1117;
+  color: #ffffff;
+  border: none;
+}
+
+.inline-controls {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+}
+
+.option-row {
+  display: grid;
+  gap: 8px;
+}
+
+.option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+}
+
+.hint {
+  background: #f5f7fb;
+  padding: 10px 12px;
+  border-radius: 12px;
+  color: #4d5b75;
+  font-size: 0.9rem;
+}
+
+.progress {
+  display: grid;
+  gap: 8px;
+}
+
+.progress-bar {
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 999px;
+  height: 10px;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #f5b277, #f08c4a);
+  transition: width 0.2s ease;
+}
+
+.progress-meta {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.85rem;
+  color: #d5deea;
+}
+
+.progress-part {
+  font-size: 0.85rem;
+  color: #f4d0ae;
+}
+
+.alert {
+  border-radius: 12px;
+  padding: 10px 12px;
+  font-size: 0.9rem;
+}
+
+.alert.error {
+  background: #ffe0e0;
+  color: #8b2a2a;
+}
+
+.alert.success {
+  background: #e7f6df;
+  color: #2a6f2f;
+}
+
+.card.accent .alert.error,
+.card.accent .alert.success {
+  background: rgba(255, 255, 255, 0.12);
+  color: #ffffff;
+}
+
+.result {
+  background: #ffffff;
+  border-radius: 18px;
+  padding: 18px;
+  box-shadow: 0 12px 30px rgba(36, 52, 80, 0.08);
+}
+
+.result ul {
+  margin: 0;
+  padding-left: 18px;
+  color: #4b5a73;
+}
+
+.hidden {
+  display: none;
+}
+
+@media (max-width: 640px) {
+  .grid {
+    grid-template-columns: 1fr;
+  }
+
+  .hero {
+    padding: 20px;
+  }
+
+  .path-row {
+    grid-template-columns: 1fr;
+  }
+
+  .inline-controls {
+    grid-template-columns: 1fr;
+  }
+
+  .progress-meta {
+    flex-direction: column;
+    gap: 4px;
+  }
+}

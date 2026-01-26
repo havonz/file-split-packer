@@ -1,0 +1,41 @@
+name: Build Binaries
+
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "pnpm"
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install deps
+        run: pnpm install
+
+      - name: Build (no bundle)
+        run: pnpm tauri build --no-bundle
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: file-split-packer-${{ matrix.os }}
+          path: |
+            src-tauri/target/release/file-split-packer*
