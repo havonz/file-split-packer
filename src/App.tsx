@@ -1,6 +1,7 @@
 import { createSignal, onCleanup, onMount, Show, For } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
-import { open } from "@tauri-apps/plugin-dialog";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import "./App.css";
@@ -18,6 +19,8 @@ type ProgressPayload = {
 type SplitResult = {
   parts: number;
   outputFiles: string[];
+  isDir: boolean;
+  baseName: string;
 };
 
 const unitToBytes = (value: number, unit: string) => {
@@ -70,6 +73,7 @@ const escapeLuaString = (value: string) =>
   value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
 
 function App() {
+  const buildTag = import.meta.env.VITE_BUILD_TAG || "dev";
   const [inputPath, setInputPath] = createSignal("");
   const [outputDir, setOutputDir] = createSignal("");
   const [splitBy, setSplitBy] = createSignal<"size" | "count">("size");
@@ -80,6 +84,9 @@ function App() {
   const [packMode, setPackMode] = createSignal<
     "split-then-zip" | "zip-then-split"
   >("split-then-zip");
+  const [dirSplitMode, setDirSplitMode] = createSignal<
+    "compress-split-store" | "store-split-compress"
+  >("compress-split-store");
   const [running, setRunning] = createSignal(false);
   const [progress, setProgress] = createSignal<ProgressPayload | null>(null);
   const [error, setError] = createSignal("");
@@ -87,6 +94,7 @@ function App() {
   const [outputFiles, setOutputFiles] = createSignal<string[]>([]);
   const [luaSnippet, setLuaSnippet] = createSignal("");
   const [copyHint, setCopyHint] = createSignal("");
+  const [openHint, setOpenHint] = createSignal("");
 
   onMount(async () => {
     const unlisten = await listen<ProgressPayload>(
@@ -111,7 +119,7 @@ function App() {
   });
 
   const chooseInput = async () => {
-    const selected = await open({ multiple: false, directory: false });
+    const selected = await openDialog({ multiple: false, directory: false });
     if (!selected || Array.isArray(selected)) return;
     setInputPath(selected);
     if (!outputDir()) {
@@ -136,7 +144,7 @@ function App() {
   };
 
   const chooseOutput = async () => {
-    const selected = await open({ multiple: false, directory: true });
+    const selected = await openDialog({ multiple: false, directory: true });
     if (!selected || Array.isArray(selected)) return;
     setOutputDir(selected);
   };
@@ -147,6 +155,7 @@ function App() {
     setOutputFiles([]);
     setLuaSnippet("");
     setCopyHint("");
+    setOpenHint("");
 
     if (!inputPath()) {
       setError("请先选择输入文件");
@@ -163,21 +172,26 @@ function App() {
       setError("每份大小必须大于 0");
       return;
     }
+    if (splitBy() === "size" && sizeUnit() === "B" && sizeValue() < 1024) {
+      setError("Bytes 模式下每份大小不得小于 1024");
+      return;
+    }
     if (splitBy() === "count" && countValue() <= 0) {
       setError("份数必须大于 0");
       return;
     }
 
-      const payload = {
-        inputPath: inputPath(),
-        outputDir: resolvedOutput,
-        splitBy: splitBy(),
+    const payload = {
+      inputPath: inputPath(),
+      outputDir: resolvedOutput,
+      splitBy: splitBy(),
         sizeBytes:
           splitBy() === "size"
             ? unitToBytes(sizeValue(), sizeUnit())
             : undefined,
         count: splitBy() === "count" ? countValue() : undefined,
         packMode: packMode(),
+        dirSplitMode: dirSplitMode(),
         password: password().trim() ? password().trim() : undefined,
       };
 
@@ -187,16 +201,14 @@ function App() {
         options: payload,
       });
       setOutputFiles(result.outputFiles);
-      const baseName = extractName(inputPath());
+      const baseName = result.baseName || extractName(inputPath());
       const fileList = result.outputFiles.map((filePath) => {
         const relative = toRelative(filePath, resolvedOutput);
         return `      XXT_SCRIPTS_PATH.."/${escapeLuaString(relative)}",`;
       });
       const passwordValue = password().trim();
-      const outputFileLine =
-        packMode() === "split-then-zip"
-          ? `  output_file = XXT_SCRIPTS_PATH.."/${escapeLuaString(baseName)}",`
-          : `  output_file = XXT_SCRIPTS_PATH.."/${escapeLuaString(baseName)}",`;
+      const outputName = result.isDir ? `${baseName}.zip` : baseName;
+      const outputFileLine = `  output_file = XXT_SCRIPTS_PATH.."/${escapeLuaString(outputName)}",`;
       const scriptLines = [
         'local merge_parts = require("merge_parts")',
         "",
@@ -212,6 +224,47 @@ function App() {
         scriptLines.push(`  password = "${escapeLuaString(passwordValue)}",`);
       }
       scriptLines.push("})");
+      if (result.isDir) {
+        const unzipTarget = `XXT_SCRIPTS_PATH.."/${escapeLuaString(baseName)}"`;
+        if (packMode() === "zip-then-split" && passwordValue) {
+          scriptLines.push("");
+          scriptLines.push("if ok and out then");
+          scriptLines.push(
+            `  local unzip_ok, unzip_err = file.unzip(out, ${unzipTarget}, "${escapeLuaString(
+              passwordValue
+            )}")`
+          );
+          scriptLines.push("  if not unzip_ok then");
+          scriptLines.push('    nLog("解压失败", unzip_err)');
+          scriptLines.push("  end");
+          scriptLines.push("  if unzip_ok then");
+          scriptLines.push("    file.remove(out)");
+          scriptLines.push("  end");
+          scriptLines.push("else");
+          scriptLines.push('  nLog("合并失败", out)');
+          scriptLines.push("end");
+        } else {
+          scriptLines.push("");
+          scriptLines.push("if ok and out then");
+          scriptLines.push(
+            `  local unzip_ok, unzip_err = file.unzip(out, ${unzipTarget})`
+          );
+          scriptLines.push("  if not unzip_ok then");
+          scriptLines.push('    nLog("解压失败", unzip_err)');
+          scriptLines.push("  end");
+          scriptLines.push("  if unzip_ok then");
+          scriptLines.push("    file.remove(out)");
+          scriptLines.push("  end");
+          scriptLines.push("else");
+          scriptLines.push('  nLog("合并失败", out)');
+          scriptLines.push("end");
+        }
+      } else {
+        scriptLines.push("");
+        scriptLines.push("if not ok then");
+        scriptLines.push('  nLog("合并失败", out)');
+        scriptLines.push("end");
+      }
       setLuaSnippet(scriptLines.join("\n"));
       setSuccess(`完成：共输出 ${result.parts} 份`);
     } catch (err) {
@@ -237,6 +290,25 @@ function App() {
     }
   };
 
+  const openPartsFolder = async () => {
+    const files = outputFiles();
+    if (!files.length) return;
+    const dir = extractDir(files[0]);
+    if (!dir) return;
+    try {
+      setOpenHint("");
+      await openPath(dir);
+      setOpenHint("已打开");
+    } catch (err) {
+      try {
+        await revealItemInDir(files[0]);
+        setOpenHint("已打开");
+      } catch (inner) {
+        setOpenHint("打开失败");
+      }
+    }
+  };
+
   const downloadLuaModule = async () => {
     try {
       const { save } = await import("@tauri-apps/plugin-dialog");
@@ -257,7 +329,9 @@ function App() {
     <main class="app-shell">
       <header class="hero">
         <div>
-          <p class="eyebrow">File Split Packer</p>
+          <p class="eyebrow">
+            File Split Packer <span class="version-tag">{buildTag}</span>
+          </p>
           <h1>大文件切分 + Zip 打包</h1>
           <p class="lead">
             支持两种切分策略与两种打包流程。
@@ -304,43 +378,29 @@ function App() {
         <div class="card">
           <h2>切分方式</h2>
           <div class="option-row">
-            <label class="option">
-              <input
-                type="radio"
-                name="splitBy"
-                checked={splitBy() === "size"}
-                onChange={() => setSplitBy("size")}
-                disabled={running()}
-              />
-              <span>按每份大小</span>
-            </label>
-            <label class="option">
-              <input
-                type="radio"
-                name="splitBy"
-                checked={splitBy() === "count"}
-                onChange={() => setSplitBy("count")}
-                disabled={running()}
-              />
-              <span>按份数</span>
-            </label>
-          </div>
-
-          <div class="field dual">
-            <div classList={{ hidden: splitBy() !== "size" }}>
-              <label>每份大小</label>
+            <label class="option inline">
+              <span class="option-label">
+                <input
+                  type="radio"
+                  name="splitBy"
+                  checked={splitBy() === "size"}
+                  onChange={() => setSplitBy("size")}
+                  disabled={running()}
+                />
+                <span>按每份大小</span>
+              </span>
               <div class="inline-controls">
                 <input
                   type="number"
-                  min="1"
+                  min={sizeUnit() === "B" ? 1024 : 1}
                   value={sizeValue()}
                   onInput={(e) => setSizeValue(Number(e.currentTarget.value))}
-                  disabled={running()}
+                  disabled={running() || splitBy() !== "size"}
                 />
                 <select
                   value={sizeUnit()}
                   onChange={(e) => setSizeUnit(e.currentTarget.value)}
-                  disabled={running()}
+                  disabled={running() || splitBy() !== "size"}
                 >
                   <option value="B">Bytes</option>
                   <option value="KB">KB</option>
@@ -348,56 +408,92 @@ function App() {
                   <option value="GB">GB</option>
                 </select>
               </div>
-            </div>
-
-            <div classList={{ hidden: splitBy() !== "count" }}>
-              <label>份数</label>
+            </label>
+            <label class="option inline">
+              <span class="option-label">
+                <input
+                  type="radio"
+                  name="splitBy"
+                  checked={splitBy() === "count"}
+                  onChange={() => setSplitBy("count")}
+                  disabled={running()}
+                />
+                <span>按份数</span>
+              </span>
               <input
+                class="inline-count"
                 type="number"
                 min="1"
                 value={countValue()}
                 onInput={(e) => setCountValue(Number(e.currentTarget.value))}
-                disabled={running()}
+                disabled={running() || splitBy() !== "count"}
               />
+            </label>
+          </div>
+
+          <Show when={packMode() === "split-then-zip"}>
+            <div class="field">
+              <label>目录切分策略</label>
+            <div class="option-row">
+              <label class="option">
+                <input
+                  type="radio"
+                    name="dirSplitMode"
+                    checked={dirSplitMode() === "compress-split-store"}
+                    onChange={() => setDirSplitMode("compress-split-store")}
+                    disabled={running()}
+                  />
+                  <span>先压缩 → 切分 → Store 打包（默认）</span>
+                </label>
+                <label class="option">
+                  <input
+                    type="radio"
+                    name="dirSplitMode"
+                    checked={dirSplitMode() === "store-split-compress"}
+                    onChange={() => setDirSplitMode("store-split-compress")}
+                    disabled={running()}
+                  />
+                <span>先 Store → 切分 → 压缩</span>
+              </label>
             </div>
           </div>
+        </Show>
         </div>
 
         <div class="card">
           <h2>打包流程</h2>
           <div class="option-row">
-            <label class="option">
-              <input
-                type="radio"
-                name="packMode"
-                checked={packMode() === "split-then-zip"}
-                onChange={() => setPackMode("split-then-zip")}
-                disabled={running()}
-              />
-              <span>先分割后逐个压缩</span>
+            <label class="option inline">
+              <span class="option-label">
+                <input
+                  type="radio"
+                  name="packMode"
+                  checked={packMode() === "split-then-zip"}
+                  onChange={() => setPackMode("split-then-zip")}
+                  disabled={running()}
+                />
+                <span>先分割后逐个压缩</span>
+              </span>
+              <span class="option-hint">
+                filename.parts/filename.part-0001.zip
+              </span>
             </label>
-            <label class="option">
-              <input
-                type="radio"
-                name="packMode"
-                checked={packMode() === "zip-then-split"}
-                onChange={() => setPackMode("zip-then-split")}
-                disabled={running()}
-              />
-              <span>先压缩然后分割</span>
+            <label class="option inline">
+              <span class="option-label">
+                <input
+                  type="radio"
+                  name="packMode"
+                  checked={packMode() === "zip-then-split"}
+                  onChange={() => setPackMode("zip-then-split")}
+                  disabled={running()}
+                />
+                <span>先压缩然后分割</span>
+              </span>
+              <span class="option-hint">
+                filename.parts/filename.zip.part-0001
+              </span>
             </label>
           </div>
-
-          <Show when={packMode() === "split-then-zip"}>
-            <div class="hint">
-              先分割后压缩：<strong>filename.parts/filename.part-0001.zip</strong>
-            </div>
-          </Show>
-          <Show when={packMode() === "zip-then-split"}>
-            <div class="hint">
-              先压缩后分割：<strong>filename.parts/filename.zip.part-0001</strong>
-            </div>
-          </Show>
 
           <div class="field">
             <label>压缩密码（可选）</label>
@@ -410,6 +506,7 @@ function App() {
             />
           </div>
         </div>
+
 
         <div class="card accent">
           <h2>执行</h2>
@@ -469,7 +566,15 @@ function App() {
 
       <Show when={outputFiles().length > 0}>
         <section class="result output">
-          <h2>输出文件</h2>
+          <div class="result-header">
+            <h2>输出文件</h2>
+            <button class="ghost" onClick={openPartsFolder}>
+              打开输出目录
+            </button>
+            <Show when={openHint()}>
+              <span class="copy-hint">{openHint()}</span>
+            </Show>
+          </div>
           <ul>
             <For each={outputFiles()}>
               {(file) => <li>{file}</li>}

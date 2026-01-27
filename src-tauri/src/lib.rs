@@ -18,6 +18,7 @@ struct SplitOptions {
     count: Option<u64>,
     pack_mode: String,
     password: Option<String>,
+    dir_split_mode: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -25,6 +26,8 @@ struct SplitOptions {
 struct SplitResult {
     parts: usize,
     output_files: Vec<String>,
+    is_dir: bool,
+    base_name: String,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -69,6 +72,7 @@ fn process_file_blocking(app: &AppHandle, options: SplitOptions) -> Result<Split
                 .password
                 .as_deref()
                 .filter(|value| !value.is_empty()),
+            options.dir_split_mode.as_deref(),
         ),
         "zip-then-split" => zip_then_split(
             app,
@@ -94,19 +98,55 @@ fn split_then_zip(
     size_bytes: Option<u64>,
     count: Option<u64>,
     password: Option<&str>,
+    dir_split_mode: Option<&str>,
 ) -> Result<SplitResult, String> {
-    let input_file = File::open(input_path).map_err(|e| e.to_string())?;
+    let metadata = fs::metadata(input_path).map_err(|e| e.to_string())?;
+    let is_dir = metadata.is_dir();
+
+    let base_name = file_base_name(input_path)?;
+    let parts_dir = output_dir.join(format!("{}.parts", base_name));
+    fs::create_dir_all(&parts_dir).map_err(|e| e.to_string())?;
+
+    let (dir_zip_compression, part_compression) = match dir_split_mode.unwrap_or("") {
+        "store-split-compress" => (CompressionMethod::Stored, CompressionMethod::Deflated),
+        "compress-split-store" => (CompressionMethod::Deflated, CompressionMethod::Stored),
+        _ => (CompressionMethod::Deflated, CompressionMethod::Stored),
+    };
+
+    let temp_zip_path = if is_dir {
+        let zip_path = parts_dir.join(format!("{}.zip", base_name));
+        zip_directory(
+            app,
+            input_path,
+            &zip_path,
+            None,
+            dir_zip_compression,
+            "pack-dir",
+        )?;
+        Some(zip_path)
+    } else {
+        None
+    };
+
+    let source_path: &Path = match temp_zip_path.as_ref() {
+        Some(path) => path.as_path(),
+        None => input_path,
+    };
+    let input_file = File::open(source_path).map_err(|e| e.to_string())?;
     let total_size = input_file.metadata().map_err(|e| e.to_string())?.len();
     if total_size == 0 {
         return Err("输入文件大小为 0，无法切分".to_string());
     }
 
-    let (chunk_size, parts) = compute_parts(total_size, split_by, size_bytes, count)?;
-    let base_name = file_base_name(input_path)?;
-    let parts_dir = output_dir.join(format!("{}.parts", base_name));
-    fs::create_dir_all(&parts_dir).map_err(|e| e.to_string())?;
+    let (chunk_size, parts) = if is_dir
+        && matches!(part_compression, CompressionMethod::Stored)
+        && split_by == "size"
+    {
+        compute_parts_with_overhead(total_size, size_bytes, base_name.as_str())?
+    } else {
+        compute_parts(total_size, split_by, size_bytes, count)?
+    };
     let width = cmp::max(3, parts.to_string().len());
-
     let mut reader = BufReader::new(input_file);
     let mut output_files = Vec::with_capacity(parts);
     let mut processed = 0u64;
@@ -134,7 +174,12 @@ fn split_then_zip(
 
         let zip_file = File::create(&zip_path).map_err(|e| e.to_string())?;
         let mut zip = ZipWriter::new(BufWriter::new(zip_file));
-        let options = build_file_options(password);
+        let compression = if is_dir {
+            part_compression
+        } else {
+            CompressionMethod::Deflated
+        };
+        let options = build_file_options(password, compression);
         zip.start_file(entry_name, options)
             .map_err(|e| e.to_string())?;
 
@@ -161,7 +206,16 @@ fn split_then_zip(
         output_files.push(zip_path.to_string_lossy().to_string());
     }
 
-    Ok(SplitResult { parts, output_files })
+    if let Some(path) = temp_zip_path {
+        let _ = fs::remove_file(path);
+    }
+
+    Ok(SplitResult {
+        parts,
+        output_files,
+        is_dir,
+        base_name,
+    })
 }
 
 fn zip_then_split(
@@ -173,49 +227,62 @@ fn zip_then_split(
     count: Option<u64>,
     password: Option<&str>,
 ) -> Result<SplitResult, String> {
-    let input_file = File::open(input_path).map_err(|e| e.to_string())?;
-    let total_size = input_file.metadata().map_err(|e| e.to_string())?.len();
-    if total_size == 0 {
-        return Err("输入文件大小为 0，无法切分".to_string());
-    }
+    let metadata = fs::metadata(input_path).map_err(|e| e.to_string())?;
+    let is_dir = metadata.is_dir();
 
     let base_name = file_base_name(input_path)?;
     let parts_dir = output_dir.join(format!("{}.parts", base_name));
     fs::create_dir_all(&parts_dir).map_err(|e| e.to_string())?;
     let zip_path = output_dir.join(format!("{}.zip", base_name));
-    emit_progress(
-        app,
-        "zip",
-        0,
-        total_size,
-        0,
-        0,
-        "开始压缩".to_string(),
-    );
-
-    let mut reader = BufReader::new(input_file);
-    let zip_file = File::create(&zip_path).map_err(|e| e.to_string())?;
-    let mut zip = ZipWriter::new(BufWriter::new(zip_file));
-    let options = build_file_options(password);
-    zip.start_file(base_name.clone(), options)
-        .map_err(|e| e.to_string())?;
-
-    let mut processed = 0u64;
-    copy_n_with_progress(&mut reader, &mut zip, total_size, |delta| {
-        processed += delta;
+    if is_dir {
+        zip_directory(
+            app,
+            input_path,
+            &zip_path,
+            password,
+            CompressionMethod::Deflated,
+            "zip",
+        )?;
+    } else {
+        let input_file = File::open(input_path).map_err(|e| e.to_string())?;
+        let total_size = input_file.metadata().map_err(|e| e.to_string())?.len();
+        if total_size == 0 {
+            return Err("输入文件大小为 0，无法切分".to_string());
+        }
         emit_progress(
             app,
             "zip",
-            processed,
+            0,
             total_size,
             0,
             0,
-            "压缩中".to_string(),
+            "开始压缩".to_string(),
         );
-    })
-    .map_err(|e| e.to_string())?;
 
-    zip.finish().map_err(|e| e.to_string())?;
+        let mut reader = BufReader::new(input_file);
+        let zip_file = File::create(&zip_path).map_err(|e| e.to_string())?;
+        let mut zip = ZipWriter::new(BufWriter::new(zip_file));
+        let options = build_file_options(password, CompressionMethod::Deflated);
+        zip.start_file(base_name.clone(), options)
+            .map_err(|e| e.to_string())?;
+
+        let mut processed = 0u64;
+        copy_n_with_progress(&mut reader, &mut zip, total_size, |delta| {
+            processed += delta;
+            emit_progress(
+                app,
+                "zip",
+                processed,
+                total_size,
+                0,
+                0,
+                "压缩中".to_string(),
+            );
+        })
+        .map_err(|e| e.to_string())?;
+
+        zip.finish().map_err(|e| e.to_string())?;
+    }
 
     let zip_size = fs::metadata(&zip_path)
         .map_err(|e| e.to_string())?
@@ -270,7 +337,12 @@ fn zip_then_split(
 
     let _ = fs::remove_file(&zip_path);
 
-    Ok(SplitResult { parts, output_files })
+    Ok(SplitResult {
+        parts,
+        output_files,
+        is_dir,
+        base_name,
+    })
 }
 
 fn compute_parts(
@@ -316,13 +388,203 @@ fn format_part_index(index: usize, width: usize) -> String {
     format!("{:0width$}", index, width = width)
 }
 
-fn build_file_options<'a>(password: Option<&'a str>) -> FileOptions<'a, ()> {
-    let options = FileOptions::default().compression_method(CompressionMethod::Deflated);
+fn build_file_options<'a>(
+    password: Option<&'a str>,
+    compression: CompressionMethod,
+) -> FileOptions<'a, ()> {
+    let options = FileOptions::default().compression_method(compression);
     if let Some(password) = password {
         options.with_aes_encryption(AesMode::Aes256, password)
     } else {
         options
     }
+}
+
+fn compute_parts_with_overhead(
+    total_size: u64,
+    size_bytes: Option<u64>,
+    base_name: &str,
+) -> Result<(u64, usize), String> {
+    let size = size_bytes.ok_or("缺少每份大小参数")?;
+    let mut parts = div_ceil(total_size, size) as usize;
+
+    for _ in 0..5 {
+        let width = cmp::max(3, parts.to_string().len());
+        let entry_len = base_name.len() + ".part-".len() + width;
+        let overhead = zip_stored_overhead(entry_len);
+        if size <= overhead {
+            return Err(format!(
+                "每份大小过小，至少需要 {} 字节",
+                overhead + 1
+            ));
+        }
+        let payload = size - overhead;
+        let next_parts = div_ceil(total_size, payload) as usize;
+        if next_parts == parts {
+            return Ok((payload, parts));
+        }
+        parts = next_parts;
+    }
+
+    let width = cmp::max(3, parts.to_string().len());
+    let entry_len = base_name.len() + ".part-".len() + width;
+    let overhead = zip_stored_overhead(entry_len);
+    if size <= overhead {
+        return Err(format!(
+            "每份大小过小，至少需要 {} 字节",
+            overhead + 1
+        ));
+    }
+    Ok((size - overhead, parts))
+}
+
+fn zip_stored_overhead(entry_name_len: usize) -> u64 {
+    let name_len = entry_name_len as u64;
+    let local_header = 30u64;
+    let central_header = 46u64;
+    let end_of_central = 22u64;
+    let data_descriptor = 16u64;
+    let safety = 32u64;
+    local_header + central_header + end_of_central + data_descriptor + safety + (2 * name_len)
+}
+
+fn zip_directory(
+    app: &AppHandle,
+    dir_path: &Path,
+    zip_path: &Path,
+    password: Option<&str>,
+    compression: CompressionMethod,
+    phase: &str,
+) -> Result<(), String> {
+    let total_size = dir_total_size(dir_path)?;
+    let zip_file = File::create(zip_path).map_err(|e| e.to_string())?;
+    let mut zip = ZipWriter::new(BufWriter::new(zip_file));
+    let mut processed = 0u64;
+
+    let root_name = dir_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| "无法解析目录名".to_string())?
+        .to_string();
+
+    emit_progress(
+        app,
+        phase,
+        0,
+        total_size,
+        0,
+        0,
+        "打包目录中".to_string(),
+    );
+
+    add_dir_entries(
+        dir_path,
+        dir_path,
+        &root_name,
+        password,
+        compression,
+        app,
+        phase,
+        &mut processed,
+        total_size,
+        &mut zip,
+    )?;
+
+    zip.finish().map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+fn add_dir_entries(
+    root: &Path,
+    current: &Path,
+    root_name: &str,
+    password: Option<&str>,
+    compression: CompressionMethod,
+    app: &AppHandle,
+    phase: &str,
+    processed: &mut u64,
+    total_size: u64,
+    zip: &mut ZipWriter<BufWriter<File>>,
+) -> Result<(), String> {
+    let mut has_entry = false;
+    let entries = fs::read_dir(current).map_err(|e| e.to_string())?;
+    for entry in entries {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let path = entry.path();
+        let rel = path
+            .strip_prefix(root)
+            .map_err(|e| e.to_string())?;
+        let rel_path = if rel.as_os_str().is_empty() {
+            root_name.to_string()
+        } else {
+            format!(
+                "{}/{}",
+                root_name,
+                rel.to_string_lossy().replace('\\', "/")
+            )
+        };
+        has_entry = true;
+
+        if path.is_dir() {
+            let dir_name = format!("{}/", rel_path.trim_end_matches('/'));
+            zip.add_directory(dir_name, build_file_options(password, compression))
+                .map_err(|e| e.to_string())?;
+            add_dir_entries(
+                root,
+                &path,
+                root_name,
+                password,
+                compression,
+                app,
+                phase,
+                processed,
+                total_size,
+                zip,
+            )?;
+        } else if path.is_file() {
+            zip.start_file(rel_path, build_file_options(password, compression))
+                .map_err(|e| e.to_string())?;
+            let file_size = fs::metadata(&path).map_err(|e| e.to_string())?.len();
+            let mut file = BufReader::new(File::open(&path).map_err(|e| e.to_string())?);
+            copy_n_with_progress(&mut file, zip, file_size, |delta| {
+                *processed += delta;
+                emit_progress(
+                    app,
+                    phase,
+                    *processed,
+                    total_size,
+                    0,
+                    0,
+                    "打包目录中".to_string(),
+                );
+            })
+            .map_err(|e| e.to_string())?;
+        }
+    }
+
+    if !has_entry {
+        let dir_name = format!("{}/", root_name.trim_end_matches('/'));
+        zip.add_directory(dir_name, build_file_options(password, compression))
+            .map_err(|e| e.to_string())?;
+    }
+
+    Ok(())
+}
+
+fn dir_total_size(path: &Path) -> Result<u64, String> {
+    let mut total = 0u64;
+    let entries = fs::read_dir(path).map_err(|e| e.to_string())?;
+    for entry in entries {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let entry_path = entry.path();
+        let meta = entry.metadata().map_err(|e| e.to_string())?;
+        if meta.is_dir() {
+            total += dir_total_size(&entry_path)?;
+        } else if meta.is_file() {
+            total += meta.len();
+        }
+    }
+    Ok(total)
 }
 
 fn copy_n_with_progress<R: Read, W: Write>(
@@ -374,6 +636,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![process_file])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
