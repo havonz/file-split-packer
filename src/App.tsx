@@ -2,7 +2,9 @@ import { createSignal, onCleanup, onMount, Show, For } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import "./App.css";
+import mergePartsLua from "../xxtouch/merge_parts.lua?raw";
 
 type ProgressPayload = {
   phase: string;
@@ -48,6 +50,25 @@ const extractDir = (path: string) => {
   return slashIndex === -1 ? "" : path.slice(0, slashIndex);
 };
 
+const extractName = (path: string) => {
+  const slashIndex = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
+  return slashIndex === -1 ? path : path.slice(slashIndex + 1);
+};
+
+const normalizePath = (path: string) => path.replace(/\\/g, "/");
+
+const toRelative = (fullPath: string, baseDir: string) => {
+  const full = normalizePath(fullPath);
+  const base = normalizePath(baseDir).replace(/\/+$/, "");
+  if (full.startsWith(base + "/")) {
+    return full.slice(base.length + 1);
+  }
+  return extractName(fullPath);
+};
+
+const escapeLuaString = (value: string) =>
+  value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+
 function App() {
   const [inputPath, setInputPath] = createSignal("");
   const [outputDir, setOutputDir] = createSignal("");
@@ -64,6 +85,8 @@ function App() {
   const [error, setError] = createSignal("");
   const [success, setSuccess] = createSignal("");
   const [outputFiles, setOutputFiles] = createSignal<string[]>([]);
+  const [luaSnippet, setLuaSnippet] = createSignal("");
+  const [copyHint, setCopyHint] = createSignal("");
 
   onMount(async () => {
     const unlisten = await listen<ProgressPayload>(
@@ -72,8 +95,18 @@ function App() {
         setProgress(event.payload);
       }
     );
+    const unlistenDrop = await getCurrentWebview().onDragDropEvent((event) => {
+      if (event.payload.type !== "drop") return;
+      const path = event.payload.paths?.[0];
+      if (!path) return;
+      setInputPath(path);
+      if (!outputDir()) {
+        setOutputDir(extractDir(path));
+      }
+    });
     onCleanup(() => {
       unlisten();
+      unlistenDrop();
     });
   });
 
@@ -86,6 +119,22 @@ function App() {
     }
   };
 
+  const handleFileDrop = (event: DragEvent) => {
+    event.preventDefault();
+    const list = event.dataTransfer?.files;
+    if (!list || list.length === 0) return;
+    const file = list[0];
+    if (!file?.path) return;
+    setInputPath(file.path);
+    if (!outputDir()) {
+      setOutputDir(extractDir(file.path));
+    }
+  };
+
+  const handleDragOver = (event: DragEvent) => {
+    event.preventDefault();
+  };
+
   const chooseOutput = async () => {
     const selected = await open({ multiple: false, directory: true });
     if (!selected || Array.isArray(selected)) return;
@@ -96,6 +145,8 @@ function App() {
     setError("");
     setSuccess("");
     setOutputFiles([]);
+    setLuaSnippet("");
+    setCopyHint("");
 
     if (!inputPath()) {
       setError("请先选择输入文件");
@@ -136,6 +187,32 @@ function App() {
         options: payload,
       });
       setOutputFiles(result.outputFiles);
+      const baseName = extractName(inputPath());
+      const fileList = result.outputFiles.map((filePath) => {
+        const relative = toRelative(filePath, resolvedOutput);
+        return `      XXT_SCRIPTS_PATH.."/${escapeLuaString(relative)}",`;
+      });
+      const passwordValue = password().trim();
+      const outputFileLine =
+        packMode() === "split-then-zip"
+          ? `  output_file = XXT_SCRIPTS_PATH.."/${escapeLuaString(baseName)}",`
+          : `  output_file = XXT_SCRIPTS_PATH.."/${escapeLuaString(baseName)}",`;
+      const scriptLines = [
+        'local merge_parts = require("merge_parts")',
+        "",
+        `-- ${packMode() === "split-then-zip" ? "split-then-zip" : "zip-then-split"}`,
+        "local ok, out = merge_parts.restore({",
+        `  mode = "${packMode()}",`,
+        "  file_list = {",
+        ...fileList,
+        "  },",
+        outputFileLine,
+      ];
+      if (passwordValue) {
+        scriptLines.push(`  password = "${escapeLuaString(passwordValue)}",`);
+      }
+      scriptLines.push("})");
+      setLuaSnippet(scriptLines.join("\n"));
       setSuccess(`完成：共输出 ${result.parts} 份`);
     } catch (err) {
       setError(String(err));
@@ -148,6 +225,32 @@ function App() {
     const data = progress();
     if (!data || data.totalBytes === 0) return 0;
     return Math.min(100, (data.processedBytes / data.totalBytes) * 100);
+  };
+
+  const copyLuaSnippet = async () => {
+    if (!luaSnippet()) return;
+    try {
+      await navigator.clipboard.writeText(luaSnippet());
+      setCopyHint("已复制");
+    } catch (err) {
+      setCopyHint("复制失败");
+    }
+  };
+
+  const downloadLuaModule = async () => {
+    try {
+      const { save } = await import("@tauri-apps/plugin-dialog");
+      const { writeTextFile } = await import("@tauri-apps/plugin-fs");
+      const targetPath = await save({
+        title: "保存 merge_parts.lua",
+        defaultPath: "merge_parts.lua",
+      });
+      if (!targetPath) return;
+      await writeTextFile(targetPath, mergePartsLua);
+      setCopyHint("已保存");
+    } catch (err) {
+      setCopyHint("保存失败");
+    }
   };
 
   return (
@@ -165,7 +268,11 @@ function App() {
       <section class="grid">
         <div class="card">
           <h2>源文件与输出</h2>
-          <div class="field">
+          <div
+            class="field dropzone"
+            onDrop={handleFileDrop}
+            onDragOver={handleDragOver}
+          >
             <label>输入文件</label>
             <div class="path-row">
               <input
@@ -281,10 +388,16 @@ function App() {
             </label>
           </div>
 
-          <div class="hint">
-            先分割后压缩：<strong>filename.001.zip</strong>；
-            先压缩后分割：<strong>filename.zip.001</strong>
-          </div>
+          <Show when={packMode() === "split-then-zip"}>
+            <div class="hint">
+              先分割后压缩：<strong>filename.parts/filename.part-0001.zip</strong>
+            </div>
+          </Show>
+          <Show when={packMode() === "zip-then-split"}>
+            <div class="hint">
+              先压缩后分割：<strong>filename.parts/filename.zip.part-0001</strong>
+            </div>
+          </Show>
 
           <div class="field">
             <label>压缩密码（可选）</label>
@@ -336,8 +449,26 @@ function App() {
         </div>
       </section>
 
-      <Show when={outputFiles().length > 0}>
+      <Show when={luaSnippet()}>
         <section class="result">
+          <div class="result-header">
+            <h2>XXT 合并脚本</h2>
+            <button class="ghost" onClick={copyLuaSnippet}>
+              复制
+            </button>
+            <button class="ghost" onClick={downloadLuaModule}>
+              下载 merge_parts.lua
+            </button>
+            <Show when={copyHint()}>
+              <span class="copy-hint">{copyHint()}</span>
+            </Show>
+          </div>
+          <pre class="code-block">{luaSnippet()}</pre>
+        </section>
+      </Show>
+
+      <Show when={outputFiles().length > 0}>
+        <section class="result output">
           <h2>输出文件</h2>
           <ul>
             <For each={outputFiles()}>

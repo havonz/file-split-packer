@@ -2,8 +2,8 @@
 
 大文件切分 + Zip 打包工具，支持两种切分方式与两种打包流程：
 
-- 先分割后逐个压缩：`filename.001.zip`
-- 先压缩然后分割：`filename.zip.001`
+- 先分割后逐个压缩：`filename.parts/filename.part-0001.zip`
+- 先压缩然后分割：`filename.parts/filename.zip.part-0001`
 
 ## 开发
 

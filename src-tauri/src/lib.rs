@@ -103,6 +103,8 @@ fn split_then_zip(
 
     let (chunk_size, parts) = compute_parts(total_size, split_by, size_bytes, count)?;
     let base_name = file_base_name(input_path)?;
+    let parts_dir = output_dir.join(format!("{}.parts", base_name));
+    fs::create_dir_all(&parts_dir).map_err(|e| e.to_string())?;
     let width = cmp::max(3, parts.to_string().len());
 
     let mut reader = BufReader::new(input_file);
@@ -116,9 +118,9 @@ fn split_then_zip(
             break;
         }
         let part_label = format_part_index(part_index, width);
-        let zip_name = format!("{}.{}.zip", base_name, part_label);
-        let entry_name = format!("{}.{}", base_name, part_label);
-        let zip_path = output_dir.join(&zip_name);
+        let zip_name = format!("{}.part-{}.zip", base_name, part_label);
+        let entry_name = format!("{}.part-{}", base_name, part_label);
+        let zip_path = parts_dir.join(&zip_name);
 
         emit_progress(
             app,
@@ -178,6 +180,8 @@ fn zip_then_split(
     }
 
     let base_name = file_base_name(input_path)?;
+    let parts_dir = output_dir.join(format!("{}.parts", base_name));
+    fs::create_dir_all(&parts_dir).map_err(|e| e.to_string())?;
     let zip_path = output_dir.join(format!("{}.zip", base_name));
     emit_progress(
         app,
@@ -230,8 +234,8 @@ fn zip_then_split(
             break;
         }
         let part_label = format_part_index(part_index, width);
-        let part_name = format!("{}.zip.{}", base_name, part_label);
-        let part_path = output_dir.join(&part_name);
+        let part_name = format!("{}.zip.part-{}", base_name, part_label);
+        let part_path = parts_dir.join(&part_name);
 
         emit_progress(
             app,
@@ -369,6 +373,7 @@ fn emit_progress(
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_fs::init())
         .invoke_handler(tauri::generate_handler![process_file])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

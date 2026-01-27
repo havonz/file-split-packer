@@ -23,8 +23,8 @@ body {
 .app-shell {
   display: flex;
   flex-direction: column;
-  gap: 24px;
-  padding: 32px 24px 56px;
+  gap: 16px;
+  padding: 20px 20px 32px;
   max-width: 1100px;
   margin: 0 auto;
 }
@@ -32,12 +32,12 @@ body {
 .hero {
   display: flex;
   flex-wrap: wrap;
-  gap: 24px;
+  gap: 16px;
   align-items: center;
   justify-content: space-between;
   background: linear-gradient(120deg, #fef0d7 0%, #e9f1ff 60%, #f6f7fb 100%);
   border-radius: 24px;
-  padding: 28px 32px;
+  padding: 20px 24px;
   box-shadow: 0 18px 45px rgba(45, 63, 97, 0.12);
 }
 
@@ -63,19 +63,19 @@ h1 {
 
 .grid {
   display: grid;
-  gap: 20px;
+  gap: 14px;
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .card {
   background: #ffffff;
   border-radius: 18px;
-  padding: 18px;
+  padding: 14px;
   box-shadow: 0 12px 30px rgba(36, 52, 80, 0.08);
   display: flex;
   flex-direction: column;
   gap: 12px;
-  min-height: 220px;
+  min-height: 180px;
 }
 
 .card.accent {
@@ -97,6 +97,13 @@ h1 {
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+.dropzone {
+  border: 1px dashed rgba(77, 91, 117, 0.35);
+  padding: 12px;
+  border-radius: 14px;
+  background: rgba(248, 250, 255, 0.7);
 }
 
 .field.dual {
@@ -159,6 +166,7 @@ button:disabled {
   display: grid;
   grid-template-columns: 1fr auto;
   gap: 8px;
+  margin-top: 6px;
 }
 
 .option-row {
@@ -236,14 +244,63 @@ button:disabled {
 .result {
   background: #ffffff;
   border-radius: 18px;
-  padding: 18px;
+  padding: 14px;
   box-shadow: 0 12px 30px rgba(36, 52, 80, 0.08);
+}
+
+.result.output {
+  padding: 10px 12px;
+}
+
+.result.output h2 {
+  margin: 0 0 6px 0;
+}
+
+.result.output ul {
+  margin-top: 6px;
+}
+
+.result-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.result-header h2 {
+  margin: 0;
+}
+
+.ghost {
+  background: transparent;
+  border: 1px solid #d8dee8;
+  padding: 6px 10px;
+  font-size: 0.85rem;
+  line-height: 1.2;
+}
+
+.copy-hint {
+  font-size: 0.85rem;
+  color: #5e6f88;
 }
 
 .result ul {
   margin: 0;
   padding-left: 18px;
   color: #4b5a73;
+}
+
+.code-block {
+  margin: 0;
+  padding: 14px 16px;
+  background: #0d1117;
+  color: #e9eef8;
+  border-radius: 12px;
+  font-size: 0.9rem;
+  line-height: 1.5;
+  overflow-x: auto;
+  white-space: pre-wrap;
 }
 
 .hidden {
