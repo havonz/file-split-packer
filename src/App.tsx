@@ -23,6 +23,12 @@ type SplitResult = {
   baseName: string;
 };
 
+type RestoreResult = {
+  mergedFile?: string;
+  extractedDir?: string;
+  outputFiles: string[];
+};
+
 const unitToBytes = (value: number, unit: string) => {
   const base =
     unit === "B"
@@ -74,6 +80,7 @@ const escapeLuaString = (value: string) =>
 
 function App() {
   const buildTag = import.meta.env.VITE_BUILD_TAG || "dev";
+  const [workMode, setWorkMode] = createSignal<"pack" | "restore">("pack");
   const [inputPath, setInputPath] = createSignal("");
   const [outputDir, setOutputDir] = createSignal("");
   const [splitBy, setSplitBy] = createSignal<"size" | "count">("size");
@@ -95,6 +102,13 @@ function App() {
   const [luaSnippet, setLuaSnippet] = createSignal("");
   const [copyHint, setCopyHint] = createSignal("");
   const [openHint, setOpenHint] = createSignal("");
+  const [restoreInputPath, setRestoreInputPath] = createSignal("");
+  const [restoreOutputDir, setRestoreOutputDir] = createSignal("");
+  const [restoreMode, setRestoreMode] = createSignal<
+    "split-then-zip" | "zip-then-split"
+  >("split-then-zip");
+  const [restorePassword, setRestorePassword] = createSignal("");
+  const [restoreAutoExtract, setRestoreAutoExtract] = createSignal(true);
 
   onMount(async () => {
     const unlisten = await listen<ProgressPayload>(
@@ -107,9 +121,16 @@ function App() {
       if (event.payload.type !== "drop") return;
       const path = event.payload.paths?.[0];
       if (!path) return;
-      setInputPath(path);
-      if (!outputDir()) {
-        setOutputDir(extractDir(path));
+      if (workMode() === "restore") {
+        setRestoreInputPath(path);
+        if (!restoreOutputDir()) {
+          setRestoreOutputDir(extractDir(path));
+        }
+      } else {
+        setInputPath(path);
+        if (!outputDir()) {
+          setOutputDir(extractDir(path));
+        }
       }
     });
     onCleanup(() => {
@@ -127,15 +148,40 @@ function App() {
     }
   };
 
+  const chooseRestoreFile = async () => {
+    const selected = await openDialog({ multiple: false, directory: false });
+    if (!selected || Array.isArray(selected)) return;
+    setRestoreInputPath(selected);
+    if (!restoreOutputDir()) {
+      setRestoreOutputDir(extractDir(selected));
+    }
+  };
+
+  const chooseRestoreFolder = async () => {
+    const selected = await openDialog({ multiple: false, directory: true });
+    if (!selected || Array.isArray(selected)) return;
+    setRestoreInputPath(selected);
+    if (!restoreOutputDir()) {
+      setRestoreOutputDir(extractDir(selected));
+    }
+  };
+
   const handleFileDrop = (event: DragEvent) => {
     event.preventDefault();
     const list = event.dataTransfer?.files;
     if (!list || list.length === 0) return;
     const file = list[0];
     if (!file?.path) return;
-    setInputPath(file.path);
-    if (!outputDir()) {
-      setOutputDir(extractDir(file.path));
+    if (workMode() === "restore") {
+      setRestoreInputPath(file.path);
+      if (!restoreOutputDir()) {
+        setRestoreOutputDir(extractDir(file.path));
+      }
+    } else {
+      setInputPath(file.path);
+      if (!outputDir()) {
+        setOutputDir(extractDir(file.path));
+      }
     }
   };
 
@@ -149,13 +195,38 @@ function App() {
     setOutputDir(selected);
   };
 
-  const startProcess = async () => {
+  const chooseRestoreOutput = async () => {
+    const selected = await openDialog({ multiple: false, directory: true });
+    if (!selected || Array.isArray(selected)) return;
+    setRestoreOutputDir(selected);
+  };
+
+  const resetStatus = () => {
     setError("");
     setSuccess("");
     setOutputFiles([]);
     setLuaSnippet("");
     setCopyHint("");
     setOpenHint("");
+    setProgress(null);
+  };
+
+  const switchMode = (mode: "pack" | "restore") => {
+    if (mode === workMode()) return;
+    setWorkMode(mode);
+    resetStatus();
+  };
+
+  const startProcess = async () => {
+    if (workMode() === "restore") {
+      await startRestore();
+      return;
+    }
+    await startPack();
+  };
+
+  const startPack = async () => {
+    resetStatus();
 
     if (!inputPath()) {
       setError("请先选择输入文件");
@@ -185,15 +256,15 @@ function App() {
       inputPath: inputPath(),
       outputDir: resolvedOutput,
       splitBy: splitBy(),
-        sizeBytes:
-          splitBy() === "size"
-            ? unitToBytes(sizeValue(), sizeUnit())
-            : undefined,
-        count: splitBy() === "count" ? countValue() : undefined,
-        packMode: packMode(),
-        dirSplitMode: dirSplitMode(),
-        password: password().trim() ? password().trim() : undefined,
-      };
+      sizeBytes:
+        splitBy() === "size"
+          ? unitToBytes(sizeValue(), sizeUnit())
+          : undefined,
+      count: splitBy() === "count" ? countValue() : undefined,
+      packMode: packMode(),
+      dirSplitMode: dirSplitMode(),
+      password: password().trim() ? password().trim() : undefined,
+    };
 
     try {
       setRunning(true);
@@ -274,6 +345,48 @@ function App() {
     }
   };
 
+  const startRestore = async () => {
+    resetStatus();
+
+    if (!restoreInputPath()) {
+      setError("请先选择分片文件或目录");
+      return;
+    }
+    const resolvedOutput = restoreOutputDir() || extractDir(restoreInputPath());
+    if (!resolvedOutput) {
+      setError("请指定输出目录");
+      return;
+    }
+    setRestoreOutputDir(resolvedOutput);
+
+    const payload = {
+      inputPath: restoreInputPath(),
+      outputDir: resolvedOutput,
+      mergeMode: restoreMode(),
+      password: restorePassword().trim()
+        ? restorePassword().trim()
+        : undefined,
+      autoExtract: restoreAutoExtract(),
+    };
+
+    try {
+      setRunning(true);
+      const result = await invoke<RestoreResult>("restore_parts", {
+        options: payload,
+      });
+      setOutputFiles(result.outputFiles || []);
+      if (result.extractedDir) {
+        setSuccess("合并并解包完成");
+      } else {
+        setSuccess("合并完成");
+      }
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setRunning(false);
+    }
+  };
+
   const currentProgress = () => {
     const data = progress();
     if (!data || data.totalBytes === 0) return 0;
@@ -293,7 +406,13 @@ function App() {
   const openPartsFolder = async () => {
     const files = outputFiles();
     if (!files.length) return;
-    const dir = extractDir(files[0]);
+    const primary =
+      workMode() === "restore" && files.length > 1
+        ? files[files.length - 1]
+        : files[0];
+    const dir = workMode() === "restore" && files.length > 1
+      ? primary
+      : extractDir(primary);
     if (!dir) return;
     try {
       setOpenHint("");
@@ -301,7 +420,7 @@ function App() {
       setOpenHint("已打开");
     } catch (err) {
       try {
-        await revealItemInDir(files[0]);
+        await revealItemInDir(primary);
         setOpenHint("已打开");
       } catch (inner) {
         setOpenHint("打开失败");
@@ -332,15 +451,39 @@ function App() {
           <p class="eyebrow">
             File Split Packer <span class="version-tag">{buildTag}</span>
           </p>
-          <h1>大文件切分 + Zip 打包</h1>
+          <h1>切分/合并 + Zip 打包/解包</h1>
           <p class="lead">
-            支持两种切分策略与两种打包流程。
+            一键完成分片打包与逆向合并解包。
           </p>
         </div>
       </header>
 
+      <section class="mode-bar">
+        <div class="mode-switch">
+          <button
+            classList={{ active: workMode() === "pack" }}
+            onClick={() => switchMode("pack")}
+            disabled={running()}
+          >
+            切分打包
+          </button>
+          <button
+            classList={{ active: workMode() === "restore" }}
+            onClick={() => switchMode("restore")}
+            disabled={running()}
+          >
+            合并解包
+          </button>
+        </div>
+        <p class="mode-hint">
+          {workMode() === "pack"
+            ? "用于生成分片压缩包。"
+            : "用于将分片合并并恢复文件或目录。"}
+        </p>
+      </section>
+
       <section class="grid">
-        <div class="card">
+        <div class="card" classList={{ hidden: workMode() !== "pack" }}>
           <h2>源文件与输出</h2>
           <div
             class="field dropzone"
@@ -375,7 +518,7 @@ function App() {
           </div>
         </div>
 
-        <div class="card">
+        <div class="card" classList={{ hidden: workMode() !== "pack" }}>
           <h2>切分方式</h2>
           <div class="option-row">
             <label class="option inline">
@@ -434,10 +577,10 @@ function App() {
           <Show when={packMode() === "split-then-zip"}>
             <div class="field">
               <label>目录切分策略</label>
-            <div class="option-row">
-              <label class="option">
-                <input
-                  type="radio"
+              <div class="option-row">
+                <label class="option">
+                  <input
+                    type="radio"
                     name="dirSplitMode"
                     checked={dirSplitMode() === "compress-split-store"}
                     onChange={() => setDirSplitMode("compress-split-store")}
@@ -453,14 +596,14 @@ function App() {
                     onChange={() => setDirSplitMode("store-split-compress")}
                     disabled={running()}
                   />
-                <span>先 Store → 切分 → 压缩</span>
-              </label>
+                  <span>先 Store → 切分 → 压缩</span>
+                </label>
+              </div>
             </div>
-          </div>
-        </Show>
+          </Show>
         </div>
 
-        <div class="card">
+        <div class="card" classList={{ hidden: workMode() !== "pack" }}>
           <h2>打包流程</h2>
           <div class="option-row">
             <label class="option inline">
@@ -508,10 +651,111 @@ function App() {
         </div>
 
 
+        <div class="card" classList={{ hidden: workMode() !== "restore" }}>
+          <h2>分片来源与输出</h2>
+          <div
+            class="field dropzone"
+            onDrop={handleFileDrop}
+            onDragOver={handleDragOver}
+          >
+            <label>分片文件/目录</label>
+            <div class="path-row multi">
+              <input
+                readOnly
+                value={restoreInputPath()}
+                placeholder="选择任意分片文件或 .parts 目录"
+              />
+              <button onClick={chooseRestoreFile} disabled={running()}>
+                选文件
+              </button>
+              <button onClick={chooseRestoreFolder} disabled={running()}>
+                选目录
+              </button>
+            </div>
+            <p class="hint">支持拖拽分片文件或分片目录。</p>
+          </div>
+
+          <div class="field">
+            <label>输出目录</label>
+            <div class="path-row">
+              <input
+                readOnly
+                value={restoreOutputDir()}
+                placeholder="合并输出目录（默认同目录）"
+              />
+              <button onClick={chooseRestoreOutput} disabled={running()}>
+                选择目录
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div class="card" classList={{ hidden: workMode() !== "restore" }}>
+          <h2>合并方式</h2>
+          <div class="option-row">
+            <label class="option inline">
+              <span class="option-label">
+                <input
+                  type="radio"
+                  name="restoreMode"
+                  checked={restoreMode() === "split-then-zip"}
+                  onChange={() => setRestoreMode("split-then-zip")}
+                  disabled={running()}
+                />
+                <span>解包合并</span>
+              </span>
+              <span class="option-hint">对应 先分割后逐个压缩</span>
+            </label>
+            <label class="option inline">
+              <span class="option-label">
+                <input
+                  type="radio"
+                  name="restoreMode"
+                  checked={restoreMode() === "zip-then-split"}
+                  onChange={() => setRestoreMode("zip-then-split")}
+                  disabled={running()}
+                />
+                <span>合并解包</span>
+              </span>
+              <span class="option-hint">对应 先压缩后分割</span>
+            </label>
+          </div>
+        </div>
+
+        <div class="card" classList={{ hidden: workMode() !== "restore" }}>
+          <h2>解包设置</h2>
+          <label class="option inline">
+            <span class="option-label">
+              <input
+                type="checkbox"
+                checked={restoreAutoExtract()}
+                onChange={(e) => setRestoreAutoExtract(e.currentTarget.checked)}
+                disabled={running()}
+              />
+              <span>合并后自动解压</span>
+            </span>
+            <span class="option-hint">合并结果为 Zip 时自动解包</span>
+          </label>
+          <div class="field">
+            <label>解密/解压密码（可选）</label>
+            <input
+              type="password"
+              value={restorePassword()}
+              placeholder="分片或 Zip 密码"
+              onInput={(e) => setRestorePassword(e.currentTarget.value)}
+              disabled={running()}
+            />
+          </div>
+        </div>
+
         <div class="card accent">
           <h2>执行</h2>
           <button class="primary" onClick={startProcess} disabled={running()}>
-            {running() ? "处理中..." : "开始处理"}
+            {running()
+              ? "处理中..."
+              : workMode() === "pack"
+              ? "开始切分"
+              : "开始合并"}
           </button>
 
           <Show when={progress()}>
@@ -546,7 +790,7 @@ function App() {
         </div>
       </section>
 
-      <Show when={luaSnippet()}>
+      <Show when={workMode() === "pack" && luaSnippet()}>
         <section class="result">
           <div class="result-header">
             <h2>XXT 合并脚本</h2>

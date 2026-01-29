@@ -1,12 +1,13 @@
 use serde::{Deserialize, Serialize};
 use std::{
     cmp,
+    collections::HashMap,
     fs::{self, File},
     io::{self, BufReader, BufWriter, Read, Write},
     path::{Path, PathBuf},
 };
 use tauri::{AppHandle, Emitter};
-use zip::{write::FileOptions, AesMode, CompressionMethod, ZipWriter};
+use zip::{result::ZipError, write::FileOptions, AesMode, CompressionMethod, ZipArchive, ZipWriter};
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -30,6 +31,24 @@ struct SplitResult {
     base_name: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RestoreOptions {
+    input_path: String,
+    output_dir: String,
+    merge_mode: String,
+    password: Option<String>,
+    auto_extract: Option<bool>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RestoreResult {
+    merged_file: Option<String>,
+    extracted_dir: Option<String>,
+    output_files: Vec<String>,
+}
+
 #[derive(Debug, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct ProgressPayload {
@@ -45,6 +64,14 @@ struct ProgressPayload {
 async fn process_file(app: AppHandle, options: SplitOptions) -> Result<SplitResult, String> {
     let app = app.clone();
     tauri::async_runtime::spawn_blocking(move || process_file_blocking(&app, options))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn restore_parts(app: AppHandle, options: RestoreOptions) -> Result<RestoreResult, String> {
+    let app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || restore_parts_blocking(&app, options))
         .await
         .map_err(|e| e.to_string())?
 }
@@ -87,6 +114,30 @@ fn process_file_blocking(app: &AppHandle, options: SplitOptions) -> Result<Split
                 .filter(|value| !value.is_empty()),
         ),
         _ => Err("未知的打包方式".to_string()),
+    }
+}
+
+fn restore_parts_blocking(
+    app: &AppHandle,
+    options: RestoreOptions,
+) -> Result<RestoreResult, String> {
+    let input_path = PathBuf::from(options.input_path);
+    let output_dir = PathBuf::from(options.output_dir);
+
+    if !input_path.exists() {
+        return Err("输入分片不存在".to_string());
+    }
+    if !output_dir.exists() {
+        fs::create_dir_all(&output_dir).map_err(|e| e.to_string())?;
+    }
+
+    let password = options.password.as_deref().filter(|value| !value.is_empty());
+    let auto_extract = options.auto_extract.unwrap_or(false);
+
+    match options.merge_mode.as_str() {
+        "split-then-zip" => restore_split_then_zip(app, &input_path, &output_dir, password, auto_extract),
+        "zip-then-split" => restore_zip_then_split(app, &input_path, &output_dir, password, auto_extract),
+        _ => Err("未知的合并方式".to_string()),
     }
 }
 
@@ -631,13 +682,419 @@ fn emit_progress(
     let _ = app.emit("split-progress", payload);
 }
 
+#[derive(Debug, Clone)]
+struct PartInfo {
+    index: usize,
+    path: PathBuf,
+}
+
+#[derive(Debug)]
+struct PartGroup {
+    prefix: String,
+    parts: Vec<PartInfo>,
+}
+
+fn parse_part_name(name: &str) -> Option<(String, usize, String)> {
+    let part_pos = name.rfind("part-")?;
+    let digits_start = part_pos + "part-".len();
+    let mut digits_end = digits_start;
+    for (offset, ch) in name[digits_start..].char_indices() {
+        if ch.is_ascii_digit() {
+            digits_end = digits_start + offset + ch.len_utf8();
+        } else {
+            break;
+        }
+    }
+    if digits_end == digits_start {
+        return None;
+    }
+    let digits = &name[digits_start..digits_end];
+    let index = digits.parse::<usize>().ok()?;
+    let prefix = name[..part_pos].to_string();
+    let suffix = name[digits_end..].to_string();
+    Some((prefix, index, suffix))
+}
+
+fn collect_part_group(input_path: &Path) -> Result<PartGroup, String> {
+    if input_path.is_file() {
+        let name = input_path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .ok_or_else(|| "无法解析分片文件名".to_string())?;
+        let (prefix, _, suffix) =
+            parse_part_name(name).ok_or_else(|| "无法识别分片文件名".to_string())?;
+        let dir = input_path
+            .parent()
+            .ok_or_else(|| "无法解析分片目录".to_string())?;
+        let parts = collect_part_group_from_dir(dir, Some((&prefix, &suffix)))?;
+        return Ok(PartGroup { prefix, parts });
+    }
+
+    if input_path.is_dir() {
+        let parts = collect_part_group_from_dir(input_path, None)?;
+        if parts.is_empty() {
+            return Err("未找到分片文件".to_string());
+        }
+        let (prefix, _) = parts
+            .first()
+            .and_then(|part| {
+                part.path
+                    .file_name()
+                    .and_then(|value| value.to_str())
+                    .and_then(|name| parse_part_name(name).map(|(p, _, s)| (p, s)))
+            })
+            .ok_or_else(|| "无法识别分片文件名".to_string())?;
+        return Ok(PartGroup { prefix, parts });
+    }
+
+    Err("输入路径不是文件或目录".to_string())
+}
+
+fn collect_part_group_from_dir(
+    dir: &Path,
+    filter: Option<(&String, &String)>,
+) -> Result<Vec<PartInfo>, String> {
+    let entries = fs::read_dir(dir).map_err(|e| e.to_string())?;
+    let mut groups: HashMap<(String, String), Vec<PartInfo>> = HashMap::new();
+
+    for entry in entries {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let name = match path.file_name().and_then(|value| value.to_str()) {
+            Some(name) => name,
+            None => continue,
+        };
+        let Some((prefix, index, suffix)) = parse_part_name(name) else {
+            continue;
+        };
+
+        if let Some((filter_prefix, filter_suffix)) = filter {
+            if &prefix != filter_prefix || &suffix != filter_suffix {
+                continue;
+            }
+        }
+
+        groups
+            .entry((prefix.clone(), suffix.clone()))
+            .or_default()
+            .push(PartInfo { index, path });
+    }
+
+    if groups.is_empty() {
+        return Err("未找到分片文件".to_string());
+    }
+    if groups.len() > 1 && filter.is_none() {
+        return Err("检测到多组分片，请选择具体的分片文件".to_string());
+    }
+
+    let mut parts = if let Some((filter_prefix, filter_suffix)) = filter {
+        groups
+            .remove(&(filter_prefix.clone(), filter_suffix.clone()))
+            .unwrap_or_default()
+    } else {
+        groups.into_values().next().unwrap_or_default()
+    };
+
+    if parts.is_empty() {
+        return Err("未找到分片文件".to_string());
+    }
+
+    parts.sort_by_key(|part| part.index);
+    validate_part_sequence(&parts)?;
+    Ok(parts)
+}
+
+fn validate_part_sequence(parts: &[PartInfo]) -> Result<(), String> {
+    for (idx, part) in parts.iter().enumerate() {
+        let expected = idx + 1;
+        if part.index != expected {
+            return Err(format!("分片序号不连续，缺少第 {} 份", expected));
+        }
+    }
+    Ok(())
+}
+
+fn open_zip_file<'a>(
+    archive: &'a mut ZipArchive<BufReader<File>>,
+    index: usize,
+    password: Option<&str>,
+) -> Result<zip::read::ZipFile<'a, BufReader<File>>, String> {
+    if let Some(password) = password {
+        return archive
+            .by_index_decrypt(index, password.as_bytes())
+            .map_err(|decrypt_err| map_zip_error(decrypt_err, true));
+    }
+    archive.by_index(index).map_err(|err| map_zip_error(err, false))
+}
+
+fn map_zip_error(err: ZipError, had_password: bool) -> String {
+    match err {
+        ZipError::InvalidPassword => {
+            if had_password {
+                "解密失败，请确认密码".to_string()
+            } else {
+                "需要密码才能解包".to_string()
+            }
+        }
+        _ => err.to_string(),
+    }
+}
+
+fn is_zip_file(path: &Path) -> Result<bool, String> {
+    let mut file = File::open(path).map_err(|e| e.to_string())?;
+    let mut signature = [0u8; 4];
+    let read_len = file.read(&mut signature).map_err(|e| e.to_string())?;
+    if read_len < 4 {
+        return Ok(false);
+    }
+    Ok(matches!(
+        signature,
+        [0x50, 0x4b, 0x03, 0x04] | [0x50, 0x4b, 0x05, 0x06] | [0x50, 0x4b, 0x07, 0x08]
+    ))
+}
+
+fn restore_split_then_zip(
+    app: &AppHandle,
+    input_path: &Path,
+    output_dir: &Path,
+    password: Option<&str>,
+    auto_extract: bool,
+) -> Result<RestoreResult, String> {
+    let part_group = collect_part_group(input_path)?;
+    let base_name = part_group.prefix.trim_end_matches('.').to_string();
+
+    let mut parts_with_size = Vec::with_capacity(part_group.parts.len());
+    for part in &part_group.parts {
+        let file = File::open(&part.path).map_err(|e| e.to_string())?;
+        let mut archive = ZipArchive::new(BufReader::new(file)).map_err(|e| e.to_string())?;
+        if archive.len() == 0 {
+            return Err("分片压缩包为空".to_string());
+        }
+        if archive.len() > 1 {
+            return Err("分片压缩包内包含多个文件".to_string());
+        }
+        let entry = open_zip_file(&mut archive, 0, password)?;
+        if entry.is_dir() {
+            return Err("分片压缩包内容异常".to_string());
+        }
+        parts_with_size.push((part.clone(), entry.size()));
+    }
+
+    let total_bytes: u64 = parts_with_size.iter().map(|(_, size)| *size).sum();
+    let temp_path = output_dir.join(format!("{}.merge.tmp", base_name));
+    let mut writer = BufWriter::new(File::create(&temp_path).map_err(|e| e.to_string())?);
+    let mut processed = 0u64;
+
+    for (idx, (part, size)) in parts_with_size.iter().enumerate() {
+        emit_progress(
+            app,
+            "restore",
+            processed,
+            total_bytes,
+            idx + 1,
+            parts_with_size.len(),
+            format!("合并第 {} 份", idx + 1),
+        );
+        let file = File::open(&part.path).map_err(|e| e.to_string())?;
+        let mut archive = ZipArchive::new(BufReader::new(file)).map_err(|e| e.to_string())?;
+        let mut entry = open_zip_file(&mut archive, 0, password)?;
+        copy_n_with_progress(&mut entry, &mut writer, *size, |delta| {
+            processed += delta;
+            emit_progress(
+                app,
+                "restore",
+                processed,
+                total_bytes,
+                idx + 1,
+                parts_with_size.len(),
+                "合并中".to_string(),
+            );
+        })
+        .map_err(|e| e.to_string())?;
+    }
+    writer.flush().map_err(|e| e.to_string())?;
+
+    let mut merged_name = base_name.clone();
+    if is_zip_file(&temp_path)? && !merged_name.ends_with(".zip") {
+        merged_name = format!("{}.zip", merged_name);
+    }
+    let merged_path = output_dir.join(&merged_name);
+    if merged_path.exists() {
+        fs::remove_file(&merged_path).map_err(|e| e.to_string())?;
+    }
+    fs::rename(&temp_path, &merged_path).map_err(|e| e.to_string())?;
+
+    let mut output_files = vec![merged_path.to_string_lossy().to_string()];
+    let mut extracted_dir = None;
+
+    if auto_extract && is_zip_file(&merged_path)? {
+        let target_dir = output_dir.join(strip_zip_extension(&merged_name));
+        unzip_file(app, &merged_path, &target_dir, password)?;
+        extracted_dir = Some(target_dir.to_string_lossy().to_string());
+        output_files.push(target_dir.to_string_lossy().to_string());
+    }
+
+    Ok(RestoreResult {
+        merged_file: Some(merged_path.to_string_lossy().to_string()),
+        extracted_dir,
+        output_files,
+    })
+}
+
+fn restore_zip_then_split(
+    app: &AppHandle,
+    input_path: &Path,
+    output_dir: &Path,
+    password: Option<&str>,
+    auto_extract: bool,
+) -> Result<RestoreResult, String> {
+    let part_group = collect_part_group(input_path)?;
+    let mut zip_name = part_group.prefix.trim_end_matches('.').to_string();
+    if !zip_name.ends_with(".zip") {
+        zip_name = format!("{}.zip", zip_name);
+    }
+    let temp_path = output_dir.join(format!("{}.merge.tmp", zip_name));
+    let mut writer = BufWriter::new(File::create(&temp_path).map_err(|e| e.to_string())?);
+    let mut processed = 0u64;
+    let mut total_bytes = 0u64;
+
+    for part in &part_group.parts {
+        let size = fs::metadata(&part.path).map_err(|e| e.to_string())?.len();
+        total_bytes += size;
+    }
+
+    for (idx, part) in part_group.parts.iter().enumerate() {
+        emit_progress(
+            app,
+            "merge",
+            processed,
+            total_bytes,
+            idx + 1,
+            part_group.parts.len(),
+            format!("合并第 {} 份", idx + 1),
+        );
+        let mut reader = BufReader::new(File::open(&part.path).map_err(|e| e.to_string())?);
+        let size = fs::metadata(&part.path).map_err(|e| e.to_string())?.len();
+        copy_n_with_progress(&mut reader, &mut writer, size, |delta| {
+            processed += delta;
+            emit_progress(
+                app,
+                "merge",
+                processed,
+                total_bytes,
+                idx + 1,
+                part_group.parts.len(),
+                "合并中".to_string(),
+            );
+        })
+        .map_err(|e| e.to_string())?;
+    }
+    writer.flush().map_err(|e| e.to_string())?;
+
+    let merged_path = output_dir.join(&zip_name);
+    if merged_path.exists() {
+        fs::remove_file(&merged_path).map_err(|e| e.to_string())?;
+    }
+    fs::rename(&temp_path, &merged_path).map_err(|e| e.to_string())?;
+
+    let mut output_files = vec![merged_path.to_string_lossy().to_string()];
+    let mut extracted_dir = None;
+
+    if auto_extract {
+        let target_dir = output_dir.join(strip_zip_extension(&zip_name));
+        unzip_file(app, &merged_path, &target_dir, password)?;
+        extracted_dir = Some(target_dir.to_string_lossy().to_string());
+        output_files.push(target_dir.to_string_lossy().to_string());
+    }
+
+    Ok(RestoreResult {
+        merged_file: Some(merged_path.to_string_lossy().to_string()),
+        extracted_dir,
+        output_files,
+    })
+}
+
+fn strip_zip_extension(name: &str) -> String {
+    name.strip_suffix(".zip").unwrap_or(name).to_string()
+}
+
+fn unzip_file(
+    app: &AppHandle,
+    zip_path: &Path,
+    output_dir: &Path,
+    password: Option<&str>,
+) -> Result<(), String> {
+    fs::create_dir_all(output_dir).map_err(|e| e.to_string())?;
+    let file = File::open(zip_path).map_err(|e| e.to_string())?;
+    let mut archive = ZipArchive::new(BufReader::new(file)).map_err(|e| e.to_string())?;
+    let total_entries = archive.len();
+    let mut total_bytes = 0u64;
+
+    for index in 0..total_entries {
+        let entry = open_zip_file(&mut archive, index, password)?;
+        total_bytes += entry.size();
+    }
+
+    let file = File::open(zip_path).map_err(|e| e.to_string())?;
+    let mut archive = ZipArchive::new(BufReader::new(file)).map_err(|e| e.to_string())?;
+    let mut processed = 0u64;
+    let total_entries = archive.len();
+
+    for index in 0..total_entries {
+        let mut entry = open_zip_file(&mut archive, index, password)?;
+        let Some(name) = entry.enclosed_name().map(|value| value.to_path_buf()) else {
+            continue;
+        };
+        let out_path = output_dir.join(name);
+        if entry.is_dir() || entry.name().ends_with('/') {
+            fs::create_dir_all(&out_path).map_err(|e| e.to_string())?;
+            continue;
+        }
+        if let Some(parent) = out_path.parent() {
+            fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+
+        emit_progress(
+            app,
+            "unzip",
+            processed,
+            total_bytes,
+            index + 1,
+            total_entries,
+            "解压中".to_string(),
+        );
+
+        let mut writer = BufWriter::new(File::create(&out_path).map_err(|e| e.to_string())?);
+        let size = entry.size();
+        copy_n_with_progress(&mut entry, &mut writer, size, |delta| {
+            processed += delta;
+            emit_progress(
+                app,
+                "unzip",
+                processed,
+                total_bytes,
+                index + 1,
+                total_entries,
+                "解压中".to_string(),
+            );
+        })
+        .map_err(|e| e.to_string())?;
+        writer.flush().map_err(|e| e.to_string())?;
+    }
+
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![process_file])
+        .invoke_handler(tauri::generate_handler![process_file, restore_parts])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

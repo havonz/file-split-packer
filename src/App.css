@@ -41,6 +41,50 @@ body {
   box-shadow: 0 18px 45px rgba(45, 63, 97, 0.12);
 }
 
+.mode-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.mode-switch {
+  display: inline-flex;
+  gap: 4px;
+  padding: 4px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.9);
+  box-shadow: 0 12px 30px rgba(36, 52, 80, 0.12);
+}
+
+.mode-switch button {
+  border: none;
+  background: transparent;
+  color: #4b5a73;
+  padding: 8px 16px;
+  border-radius: 999px;
+  font-weight: 700;
+  box-shadow: none;
+}
+
+.mode-switch button:hover {
+  transform: none;
+  box-shadow: none;
+}
+
+.mode-switch button.active {
+  background: #0d1117;
+  color: #ffffff;
+  box-shadow: 0 12px 24px rgba(13, 17, 23, 0.25);
+}
+
+.mode-hint {
+  margin: 0;
+  font-size: 0.9rem;
+  color: #4d5b75;
+}
+
 .eyebrow {
   text-transform: uppercase;
   letter-spacing: 0.24em;
@@ -134,6 +178,10 @@ label {
   gap: 10px;
 }
 
+.path-row.multi {
+  grid-template-columns: 1fr auto auto;
+}
+
 input,
 select,
 button {
@@ -221,6 +269,7 @@ button:disabled {
   border-radius: 12px;
   color: #4d5b75;
   font-size: 0.85rem;
+  margin: 0;
 }
 
 .progress {
