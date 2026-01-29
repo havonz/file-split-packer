@@ -1,0 +1,111 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">File Split Packer</title>
+  <desc id="desc">文件分片压缩与合并解压工具 - 简洁版图标</desc>
+  
+  <defs>
+    <!-- 主背景渐变 -->
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1E1B4B"/>
+      <stop offset="100%" stop-color="#4F46E5"/>
+    </linearGradient>
+    
+    <!-- 文件渐变 -->
+    <linearGradient id="doc" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FFFFFF"/>
+      <stop offset="100%" stop-color="#E0E7FF"/>
+    </linearGradient>
+    
+    <!-- 压缩块渐变 -->
+    <linearGradient id="zip1" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#4ADE80"/>
+      <stop offset="100%" stop-color="#22C55E"/>
+    </linearGradient>
+    <linearGradient id="zip2" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#FACC15"/>
+      <stop offset="100%" stop-color="#EAB308"/>
+    </linearGradient>
+    <linearGradient id="zip3" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#FB7185"/>
+      <stop offset="100%" stop-color="#F43F5E"/>
+    </linearGradient>
+    
+    <!-- 阴影 -->
+    <filter id="shadow">
+      <feDropShadow dx="0" dy="3" stdDeviation="5" flood-color="#000" flood-opacity="0.35"/>
+    </filter>
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="3" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+  
+  <!-- 背景 -->
+  <rect x="24" y="24" width="464" height="464" rx="96" fill="url(#bg)"/>
+  
+  <!-- ===== 左侧大文件 ===== -->
+  <g filter="url(#shadow)">
+    <path d="M80 120 L80 392 L180 392 L180 168 L132 120 Z" fill="url(#doc)"/>
+    <path d="M132 120 L132 168 L180 168" fill="#C7D2FE"/>
+    <!-- 内容线 -->
+    <g stroke="#6366F1" stroke-width="8" stroke-linecap="round" opacity="0.5">
+      <line x1="100" y1="200" x2="160" y2="200"/>
+      <line x1="100" y1="236" x2="150" y2="236"/>
+      <line x1="100" y1="272" x2="160" y2="272"/>
+      <line x1="100" y1="308" x2="140" y2="308"/>
+      <line x1="100" y1="344" x2="160" y2="344"/>
+    </g>
+    <!-- 分割线指示 -->
+    <line x1="75" y1="253" x2="185" y2="253" stroke="#F97316" stroke-width="3" stroke-dasharray="8,5"/>
+  </g>
+  
+  <!-- ===== 双向箭头 ===== -->
+  <g filter="url(#glow)">
+    <!-- 向右分割箭头 -->
+    <polygon points="200,200 260,200 260,180 300,220 260,260 260,240 200,240" 
+             fill="#FCD34D" stroke="#FFF" stroke-width="2"/>
+    <!-- 向左合并箭头 -->
+    <polygon points="300,292 240,292 240,272 200,312 240,352 240,332 300,332" 
+             fill="#FCD34D" stroke="#FFF" stroke-width="2"/>
+  </g>
+  
+  <!-- ===== 右侧三个压缩分片 ===== -->
+  <!-- 分片 1 -->
+  <g filter="url(#shadow)">
+    <rect x="320" y="100" width="112" height="80" rx="10" fill="url(#zip1)"/>
+    <g fill="#FFF" opacity="0.9">
+      <rect x="368" y="108" width="8" height="8" rx="1"/>
+      <rect x="368" y="124" width="8" height="8" rx="1"/>
+      <rect x="368" y="140" width="8" height="8" rx="1"/>
+      <rect x="368" y="156" width="8" height="8" rx="1"/>
+    </g>
+  </g>
+  
+  <!-- 分片 2 -->
+  <g filter="url(#shadow)">
+    <rect x="320" y="216" width="112" height="80" rx="10" fill="url(#zip2)"/>
+    <g fill="#FFF" opacity="0.9">
+      <rect x="368" y="224" width="8" height="8" rx="1"/>
+      <rect x="368" y="240" width="8" height="8" rx="1"/>
+      <rect x="368" y="256" width="8" height="8" rx="1"/>
+      <rect x="368" y="272" width="8" height="8" rx="1"/>
+    </g>
+  </g>
+  
+  <!-- 分片 3 -->
+  <g filter="url(#shadow)">
+    <rect x="320" y="332" width="112" height="80" rx="10" fill="url(#zip3)"/>
+    <g fill="#FFF" opacity="0.9">
+      <rect x="368" y="340" width="8" height="8" rx="1"/>
+      <rect x="368" y="356" width="8" height="8" rx="1"/>
+      <rect x="368" y="372" width="8" height="8" rx="1"/>
+      <rect x="368" y="388" width="8" height="8" rx="1"/>
+    </g>
+  </g>
+  
+  <!-- 连接虚线 -->
+  <g stroke="#FFF" stroke-width="2" stroke-dasharray="5,4" opacity="0.35">
+    <line x1="180" y1="180" x2="320" y2="140"/>
+    <line x1="180" y1="256" x2="320" y2="256"/>
+    <line x1="180" y1="332" x2="320" y2="372"/>
+  </g>
+</svg>
