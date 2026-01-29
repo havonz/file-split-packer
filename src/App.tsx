@@ -1,9 +1,12 @@
 import { createSignal, onCleanup, onMount, Show, For } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
-import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { confirm, open as openDialog } from "@tauri-apps/plugin-dialog";
+import { exists, readDir, stat } from "@tauri-apps/plugin-fs";
 import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { PhysicalPosition } from "@tauri-apps/api/dpi";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import "./App.css";
 import mergePartsLua from "../xxtouch/merge_parts.lua?raw";
 
@@ -66,6 +69,12 @@ const extractName = (path: string) => {
 
 const normalizePath = (path: string) => path.replace(/\\/g, "/");
 
+const joinPath = (dir: string, name: string) => {
+  if (!dir) return name;
+  const sep = dir.includes("\\") ? "\\" : "/";
+  return dir.replace(/[\\/]+$/, "") + sep + name;
+};
+
 const toRelative = (fullPath: string, baseDir: string) => {
   const full = normalizePath(fullPath);
   const base = normalizePath(baseDir).replace(/\/+$/, "");
@@ -80,6 +89,16 @@ const escapeLuaString = (value: string) =>
 
 function App() {
   const buildTag = import.meta.env.VITE_BUILD_TAG || "dev";
+  type DropTarget =
+    | "input-pack"
+    | "input-restore"
+    | "output-pack"
+    | "output-restore";
+  let dropTarget: DropTarget | null = null;
+  let dropDepth = 0;
+  let windowScaleFactor = 1;
+  let windowInnerPosition = { x: 0, y: 0 };
+  let ignoreNextDrop = false;
   const [workMode, setWorkMode] = createSignal<"pack" | "restore">("pack");
   const [inputPath, setInputPath] = createSignal("");
   const [outputDir, setOutputDir] = createSignal("");
@@ -88,6 +107,7 @@ function App() {
   const [sizeUnit, setSizeUnit] = createSignal("MB");
   const [countValue, setCountValue] = createSignal(4);
   const [password, setPassword] = createSignal("");
+  const [compressionLevel, setCompressionLevel] = createSignal("6");
   const [packMode, setPackMode] = createSignal<
     "split-then-zip" | "zip-then-split"
   >("split-then-zip");
@@ -109,8 +129,87 @@ function App() {
   >("split-then-zip");
   const [restorePassword, setRestorePassword] = createSignal("");
   const [restoreAutoExtract, setRestoreAutoExtract] = createSignal(true);
+  const [dropHint, setDropHint] = createSignal<DropTarget | null>(null);
+  const getLogicalPoint = (position: { x: number; y: number }) => {
+    try {
+      const logical = new PhysicalPosition(position.x, position.y).toLogical(
+        windowScaleFactor
+      );
+      return { x: logical.x, y: logical.y };
+    } catch (err) {
+      return { x: position.x, y: position.y };
+    }
+  };
+
+  const resolveTargetFromPosition = (position: { x: number; y: number }) => {
+    const buildPoints = () => {
+      const logical = getLogicalPoint(position);
+      const points = [
+        { x: logical.x, y: logical.y },
+        { x: position.x, y: position.y },
+      ];
+      if (windowInnerPosition.x || windowInnerPosition.y) {
+        const innerLogical = getLogicalPoint(windowInnerPosition);
+        points.push({ x: logical.x - innerLogical.x, y: logical.y - innerLogical.y });
+        points.push({ x: position.x - innerLogical.x, y: position.y - innerLogical.y });
+      }
+      return points.filter(
+        (point) => Number.isFinite(point.x) && Number.isFinite(point.y)
+      );
+    };
+
+    const getRect = (target: DropTarget) => {
+      const element = document.querySelector<HTMLElement>(
+        `[data-drop-target="${target}"]`
+      );
+      if (!element) return null;
+      const rect = element.getBoundingClientRect();
+      if (rect.width === 0 || rect.height === 0) return null;
+      return rect;
+    };
+
+    const contains = (rect: DOMRect, x: number, y: number) =>
+      x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
+
+    const points = buildPoints();
+    const priority: DropTarget[] = [
+      "output-pack",
+      "output-restore",
+      "input-pack",
+      "input-restore",
+    ];
+
+    for (const target of priority) {
+      const rect = getRect(target);
+      if (!rect) continue;
+      if (points.some((point) => contains(rect, point.x, point.y))) {
+        return target;
+      }
+    }
+
+    return null;
+  };
 
   onMount(async () => {
+    try {
+      const appWindow = getCurrentWindow();
+      windowScaleFactor = await appWindow.scaleFactor();
+      const initialPosition = await appWindow.innerPosition();
+      windowInnerPosition = { x: initialPosition.x, y: initialPosition.y };
+      const unlistenScale = await appWindow.onScaleChanged(({ payload }) => {
+        windowScaleFactor = payload.scaleFactor;
+      });
+      const unlistenMove = await appWindow.onMoved(({ payload }) => {
+        windowInnerPosition = { x: payload.x, y: payload.y };
+      });
+      onCleanup(() => {
+        unlistenScale();
+        unlistenMove();
+      });
+    } catch (err) {
+      windowScaleFactor = window.devicePixelRatio || 1;
+    }
+
     const unlisten = await listen<ProgressPayload>(
       "split-progress",
       (event) => {
@@ -118,19 +217,64 @@ function App() {
       }
     );
     const unlistenDrop = await getCurrentWebview().onDragDropEvent((event) => {
+      if (event.payload.type === "leave") {
+        dropTarget = null;
+        dropDepth = 0;
+        setDropHint(null);
+        return;
+      }
+      if (event.payload.type === "enter" || event.payload.type === "over") {
+        const position = event.payload.position;
+        const resolved = resolveTargetFromPosition(position);
+        dropTarget = resolved;
+        setDropHint(resolved);
+        return;
+      }
       if (event.payload.type !== "drop") return;
+      if (ignoreNextDrop) {
+        ignoreNextDrop = false;
+        return;
+      }
       const path = event.payload.paths?.[0];
       if (!path) return;
+      const position = event.payload.position;
+      const resolved = resolveTargetFromPosition(position) || dropTarget;
+      if (resolved === "output-pack") {
+        void resolveDropDir(path).then((dir) => {
+          if (dir) setOutputDir(dir);
+        });
+        dropTarget = null;
+        dropDepth = 0;
+        setDropHint(null);
+        return;
+      }
+      if (resolved === "output-restore") {
+        void resolveDropDir(path).then((dir) => {
+          if (dir) setRestoreOutputDir(dir);
+        });
+        dropTarget = null;
+        dropDepth = 0;
+        setDropHint(null);
+        return;
+      }
+      if (resolved === "input-pack") {
+        setInputPath(path);
+        dropTarget = null;
+        dropDepth = 0;
+        setDropHint(null);
+        return;
+      }
+      if (resolved === "input-restore") {
+        setRestoreInputPath(path);
+        dropTarget = null;
+        dropDepth = 0;
+        setDropHint(null);
+        return;
+      }
       if (workMode() === "restore") {
         setRestoreInputPath(path);
-        if (!restoreOutputDir()) {
-          setRestoreOutputDir(extractDir(path));
-        }
       } else {
         setInputPath(path);
-        if (!outputDir()) {
-          setOutputDir(extractDir(path));
-        }
       }
     });
     onCleanup(() => {
@@ -143,50 +287,110 @@ function App() {
     const selected = await openDialog({ multiple: false, directory: false });
     if (!selected || Array.isArray(selected)) return;
     setInputPath(selected);
-    if (!outputDir()) {
-      setOutputDir(extractDir(selected));
-    }
   };
 
   const chooseRestoreFile = async () => {
     const selected = await openDialog({ multiple: false, directory: false });
     if (!selected || Array.isArray(selected)) return;
     setRestoreInputPath(selected);
-    if (!restoreOutputDir()) {
-      setRestoreOutputDir(extractDir(selected));
-    }
   };
 
   const chooseRestoreFolder = async () => {
     const selected = await openDialog({ multiple: false, directory: true });
     if (!selected || Array.isArray(selected)) return;
     setRestoreInputPath(selected);
-    if (!restoreOutputDir()) {
-      setRestoreOutputDir(extractDir(selected));
-    }
   };
 
   const handleFileDrop = (event: DragEvent) => {
     event.preventDefault();
+    event.stopPropagation();
+    dropTarget = null;
+    dropDepth = 0;
+    setDropHint(null);
+    ignoreNextDrop = true;
     const list = event.dataTransfer?.files;
     if (!list || list.length === 0) return;
     const file = list[0];
     if (!file?.path) return;
     if (workMode() === "restore") {
       setRestoreInputPath(file.path);
-      if (!restoreOutputDir()) {
-        setRestoreOutputDir(extractDir(file.path));
-      }
     } else {
       setInputPath(file.path);
-      if (!outputDir()) {
-        setOutputDir(extractDir(file.path));
-      }
     }
   };
 
-  const handleDragOver = (event: DragEvent) => {
+  const handleDragEnter =
+    (target: DropTarget) => (event: DragEvent) => {
+      event.preventDefault();
+      if (dropTarget !== target) {
+        dropTarget = target;
+        dropDepth = 1;
+        setDropHint(target);
+      } else {
+        dropDepth += 1;
+      }
+    };
+
+  const handleDragOver =
+    (target: DropTarget) => (event: DragEvent) => {
+      event.preventDefault();
+      if (dropTarget !== target) {
+        dropTarget = target;
+        dropDepth = 1;
+        setDropHint(target);
+      }
+    };
+
+  const handleDragLeave =
+    (target: DropTarget) => () => {
+      if (dropTarget !== target) return;
+      dropDepth = Math.max(0, dropDepth - 1);
+      if (dropDepth === 0) {
+        dropTarget = null;
+        setDropHint(null);
+      }
+    };
+
+  const resolveDropDir = async (path: string) => {
+    try {
+      const info = await stat(path);
+      if (info.isDir) {
+        return path;
+      }
+    } catch (err) {
+      // ignore
+    }
+    return extractDir(path);
+  };
+
+  const handlePackOutputDrop = async (event: DragEvent) => {
     event.preventDefault();
+    event.stopPropagation();
+    dropTarget = null;
+    dropDepth = 0;
+    setDropHint(null);
+    ignoreNextDrop = true;
+    if (running()) return;
+    const file = event.dataTransfer?.files?.[0];
+    if (!file?.path) return;
+    const dir = await resolveDropDir(file.path);
+    if (!dir) return;
+    setOutputDir(dir);
+  };
+
+  const handleRestoreOutputDrop = async (event: DragEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
+    dropTarget = null;
+    dropDepth = 0;
+    setDropHint(null);
+    ignoreNextDrop = true;
+    if (running()) return;
+    const file = event.dataTransfer?.files?.[0];
+    if (!file?.path) return;
+    const dir = await resolveDropDir(file.path);
+    if (!dir) return;
+    setRestoreOutputDir(dir);
   };
 
   const chooseOutput = async () => {
@@ -209,6 +413,28 @@ function App() {
     setCopyHint("");
     setOpenHint("");
     setProgress(null);
+  };
+
+  const ensurePartsDir = async (baseName: string, resolvedOutput: string) => {
+    const partsDir = joinPath(resolvedOutput, `${baseName}.parts`);
+    try {
+      const existsDir = await exists(partsDir);
+      if (!existsDir) {
+        return { proceed: true, overwrite: false };
+      }
+      const entries = await readDir(partsDir);
+      if (entries.length === 0) {
+        return { proceed: true, overwrite: false };
+      }
+      const confirmed = await confirm(
+        "检测到已存在的分片目录，继续将覆盖其中内容，是否确认？",
+        { title: "确认覆盖", kind: "warning" }
+      );
+      return { proceed: confirmed, overwrite: confirmed };
+    } catch (err) {
+      setError("无法检查输出目录，请手动确认分片目录是否可写");
+      return { proceed: false, overwrite: false };
+    }
   };
 
   const switchMode = (mode: "pack" | "restore") => {
@@ -237,8 +463,6 @@ function App() {
       setError("请指定输出目录");
       return;
     }
-    setOutputDir(resolvedOutput);
-
     if (splitBy() === "size" && sizeValue() <= 0) {
       setError("每份大小必须大于 0");
       return;
@@ -249,6 +473,11 @@ function App() {
     }
     if (splitBy() === "count" && countValue() <= 0) {
       setError("份数必须大于 0");
+      return;
+    }
+    const baseName = extractName(inputPath());
+    const overwriteDecision = await ensurePartsDir(baseName, resolvedOutput);
+    if (!overwriteDecision.proceed) {
       return;
     }
 
@@ -264,6 +493,8 @@ function App() {
       packMode: packMode(),
       dirSplitMode: dirSplitMode(),
       password: password().trim() ? password().trim() : undefined,
+      compressionLevel: Number(compressionLevel()),
+      overwriteParts: overwriteDecision.overwrite,
     };
 
     try {
@@ -357,8 +588,6 @@ function App() {
       setError("请指定输出目录");
       return;
     }
-    setRestoreOutputDir(resolvedOutput);
-
     const payload = {
       inputPath: restoreInputPath(),
       outputDir: resolvedOutput,
@@ -487,8 +716,12 @@ function App() {
           <h2>源文件与输出</h2>
           <div
             class="field dropzone"
+            data-drop-target="input-pack"
             onDrop={handleFileDrop}
-            onDragOver={handleDragOver}
+            onDragEnter={handleDragEnter("input-pack")}
+            onDragOver={handleDragOver("input-pack")}
+            onDragLeave={handleDragLeave("input-pack")}
+            classList={{ "drop-active": dropHint() === "input-pack" }}
           >
             <label>输入文件</label>
             <div class="path-row">
@@ -503,7 +736,15 @@ function App() {
             </div>
           </div>
 
-          <div class="field">
+          <div
+            class="field"
+            data-drop-target="output-pack"
+            onDrop={handlePackOutputDrop}
+            onDragEnter={handleDragEnter("output-pack")}
+            onDragOver={handleDragOver("output-pack")}
+            onDragLeave={handleDragLeave("output-pack")}
+            classList={{ "drop-active": dropHint() === "output-pack" }}
+          >
             <label>输出目录</label>
             <div class="path-row">
               <input
@@ -530,7 +771,7 @@ function App() {
                   onChange={() => setSplitBy("size")}
                   disabled={running()}
                 />
-                <span>按每份大小</span>
+                <span>每份最大</span>
               </span>
               <div class="inline-controls">
                 <input
@@ -648,6 +889,18 @@ function App() {
               disabled={running()}
             />
           </div>
+          <div class="field">
+            <label>压缩等级</label>
+            <select
+              value={compressionLevel()}
+              onChange={(e) => setCompressionLevel(e.currentTarget.value)}
+              disabled={running()}
+            >
+              <option value="1">速度优先（1）</option>
+              <option value="6">平衡（6）</option>
+              <option value="9">体积优先（9）</option>
+            </select>
+          </div>
         </div>
 
 
@@ -655,8 +908,12 @@ function App() {
           <h2>分片来源与输出</h2>
           <div
             class="field dropzone"
+            data-drop-target="input-restore"
             onDrop={handleFileDrop}
-            onDragOver={handleDragOver}
+            onDragEnter={handleDragEnter("input-restore")}
+            onDragOver={handleDragOver("input-restore")}
+            onDragLeave={handleDragLeave("input-restore")}
+            classList={{ "drop-active": dropHint() === "input-restore" }}
           >
             <label>分片文件/目录</label>
             <div class="path-row multi">
@@ -675,7 +932,15 @@ function App() {
             <p class="hint">支持拖拽分片文件或分片目录。</p>
           </div>
 
-          <div class="field">
+          <div
+            class="field"
+            data-drop-target="output-restore"
+            onDrop={handleRestoreOutputDrop}
+            onDragEnter={handleDragEnter("output-restore")}
+            onDragOver={handleDragOver("output-restore")}
+            onDragLeave={handleDragLeave("output-restore")}
+            classList={{ "drop-active": dropHint() === "output-restore" }}
+          >
             <label>输出目录</label>
             <div class="path-row">
               <input
