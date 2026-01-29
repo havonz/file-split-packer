@@ -459,12 +459,12 @@ button:disabled {
   display: flex;
   justify-content: space-between;
   font-size: 0.8rem;
-  color: #d5deea;
+  color: #2c3e50;
 }
 
 .progress-part {
   font-size: 0.8rem;
-  color: #aed6f1;
+  color: #2980b9;
 }
 
 .alert {
@@ -485,8 +485,8 @@ button:disabled {
 
 .card.accent .alert.error,
 .card.accent .alert.success {
-  background: rgba(255, 255, 255, 0.12);
-  color: #ffffff;
+  background: rgba(255, 255, 255, 0.5);
+  color: #2c3e50;
 }
 
 .result {
