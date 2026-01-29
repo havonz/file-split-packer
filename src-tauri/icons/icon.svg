@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">File Split Packer Icon</title>
+  <desc id="desc">Split and merge files with zip packaging</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#fef0d7"/>
+      <stop offset="55%" stop-color="#e9f1ff"/>
+      <stop offset="100%" stop-color="#f6f7fb"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0d1117"/>
+      <stop offset="100%" stop-color="#1c2b45"/>
+    </linearGradient>
+    <linearGradient id="warm" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#f5b277"/>
+      <stop offset="100%" stop-color="#f08c4a"/>
+    </linearGradient>
+  </defs>
+
+  <rect x="24" y="24" width="464" height="464" rx="120" fill="url(#bg)"/>
+
+  <g fill="none" stroke="#0d1117" stroke-width="16" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="84" y="148" width="128" height="168" rx="20"/>
+    <rect x="100" y="168" width="96" height="20" rx="10" fill="#ffffff" stroke="none"/>
+    <rect x="100" y="204" width="96" height="20" rx="10" fill="#ffffff" stroke="none"/>
+    <rect x="100" y="240" width="96" height="20" rx="10" fill="#ffffff" stroke="none"/>
+  </g>
+
+  <g fill="none" stroke="#0d1117" stroke-width="16" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="300" y="148" width="128" height="168" rx="20"/>
+    <rect x="316" y="168" width="96" height="20" rx="10" fill="#ffffff" stroke="none"/>
+    <rect x="316" y="204" width="96" height="20" rx="10" fill="#ffffff" stroke="none"/>
+    <rect x="316" y="240" width="96" height="20" rx="10" fill="#ffffff" stroke="none"/>
+  </g>
+
+  <g>
+    <path d="M216 232c20-34 60-34 80 0" fill="none" stroke="url(#warm)" stroke-width="16" stroke-linecap="round"/>
+    <path d="M220 226l-10 18 20-2" fill="none" stroke="url(#warm)" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M292 226l10 18-20-2" fill="none" stroke="url(#warm)" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+
+  <g>
+    <rect x="156" y="330" width="200" height="110" rx="26" fill="url(#accent)"/>
+    <rect x="176" y="350" width="160" height="70" rx="18" fill="#111824"/>
+    <path d="M256 350v70" stroke="url(#warm)" stroke-width="12" stroke-linecap="round"/>
+    <path d="M242 368h28" stroke="url(#warm)" stroke-width="12" stroke-linecap="round"/>
+    <path d="M242 388h28" stroke="url(#warm)" stroke-width="12" stroke-linecap="round"/>
+    <path d="M242 408h28" stroke="url(#warm)" stroke-width="12" stroke-linecap="round"/>
+  </g>
+</svg>
