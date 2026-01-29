@@ -3,41 +3,41 @@
   <desc id="desc">文件分片压缩与合并解压工具图标</desc>
   
   <defs>
-    <!-- 主背景渐变 - 深邃的紫蓝色调 -->
+    <!-- 主背景渐变 - 蓝色调 -->
     <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#312E81"/>
-      <stop offset="50%" stop-color="#4338CA"/>
-      <stop offset="100%" stop-color="#6366F1"/>
+      <stop offset="0%" stop-color="#1a5276"/>
+      <stop offset="50%" stop-color="#2980b9"/>
+      <stop offset="100%" stop-color="#3498db"/>
     </linearGradient>
     
     <!-- 文件渐变 -->
     <linearGradient id="fileGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#F8FAFC"/>
-      <stop offset="100%" stop-color="#E2E8F0"/>
+      <stop offset="0%" stop-color="#f8f8fa"/>
+      <stop offset="100%" stop-color="#ebf5fb"/>
     </linearGradient>
     
-    <!-- 分片压缩包渐变 - 绿色 -->
+    <!-- 分片压缩包渐变 - 浅蓝 -->
     <linearGradient id="zipGrad1" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#34D399"/>
-      <stop offset="100%" stop-color="#10B981"/>
+      <stop offset="0%" stop-color="#85c1e9"/>
+      <stop offset="100%" stop-color="#5dade2"/>
     </linearGradient>
     
-    <!-- 分片压缩包渐变 - 橙色 -->
+    <!-- 分片压缩包渐变 - 中蓝 -->
     <linearGradient id="zipGrad2" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#FBBF24"/>
-      <stop offset="100%" stop-color="#F59E0B"/>
+      <stop offset="0%" stop-color="#5dade2"/>
+      <stop offset="100%" stop-color="#3498db"/>
     </linearGradient>
     
-    <!-- 分片压缩包渐变 - 粉红 -->
+    <!-- 分片压缩包渐变 - 深蓝 -->
     <linearGradient id="zipGrad3" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#F472B6"/>
-      <stop offset="100%" stop-color="#EC4899"/>
+      <stop offset="0%" stop-color="#3498db"/>
+      <stop offset="100%" stop-color="#2980b9"/>
     </linearGradient>
     
     <!-- 箭头渐变 -->
     <linearGradient id="arrowGrad" x1="0%" y1="0%" x2="100%" y2="0%">
-      <stop offset="0%" stop-color="#FBBF24"/>
-      <stop offset="100%" stop-color="#F59E0B"/>
+      <stop offset="0%" stop-color="#aed6f1"/>
+      <stop offset="100%" stop-color="#85c1e9"/>
     </linearGradient>
     
     <!-- 发光效果 -->
@@ -77,13 +77,13 @@
     <!-- 文件主体 -->
     <path d="M72 100 L72 412 L188 412 L188 148 L140 100 Z" 
           fill="url(#fileGrad)" 
-          stroke="#94A3B8" 
+          stroke="#85c1e9" 
           stroke-width="2"/>
     <!-- 文件折角 -->
-    <path d="M140 100 L140 148 L188 148" fill="#CBD5E1" stroke="#94A3B8" stroke-width="2"/>
+    <path d="M140 100 L140 148 L188 148" fill="#d6eaf8" stroke="#85c1e9" stroke-width="2"/>
     
     <!-- 文件内容横线 - 代表数据 -->
-    <g stroke="#64748B" stroke-width="8" stroke-linecap="round" opacity="0.7">
+    <g stroke="#3498db" stroke-width="8" stroke-linecap="round" opacity="0.5">
       <line x1="92" y1="180" x2="168" y2="180"/>
       <line x1="92" y1="212" x2="158" y2="212"/>
       <line x1="92" y1="244" x2="168" y2="244"/>
@@ -94,8 +94,8 @@
     </g>
     
     <!-- 分割虚线 (表示将被切分) -->
-    <line x1="72" y1="233" x2="188" y2="233" stroke="#EF4444" stroke-width="3" stroke-dasharray="8,4" opacity="0.8"/>
-    <line x1="72" y1="310" x2="188" y2="310" stroke="#EF4444" stroke-width="3" stroke-dasharray="8,4" opacity="0.8"/>
+    <line x1="72" y1="233" x2="188" y2="233" stroke="#2980b9" stroke-width="3" stroke-dasharray="8,4" opacity="0.8"/>
+    <line x1="72" y1="310" x2="188" y2="310" stroke="#2980b9" stroke-width="3" stroke-dasharray="8,4" opacity="0.8"/>
   </g>
   
   <!-- ==================== 中间：双向循环箭头 ==================== -->
@@ -131,7 +131,7 @@
     <!-- 中间连接的循环圆弧 -->
     <path d="M264 205 C 264 240, 264 270, 264 305" 
           fill="none" 
-          stroke="#FBBF24" 
+          stroke="#aed6f1" 
           stroke-width="4" 
           stroke-dasharray="6,4"
           opacity="0.6"/>
@@ -139,11 +139,11 @@
   
   <!-- ==================== 右侧：三个压缩分片 ==================== -->
   
-  <!-- 分片 1 (绿色 - 顶部) -->
+  <!-- 分片 1 (浅蓝 - 顶部) -->
   <g filter="url(#softShadow)">
     <rect x="340" y="80" width="110" height="90" rx="12" fill="url(#zipGrad1)"/>
     <!-- 拉链效果 -->
-    <rect x="387" y="80" width="16" height="90" fill="#047857" opacity="0.25"/>
+    <rect x="387" y="80" width="16" height="90" fill="#2980b9" opacity="0.25"/>
     <g fill="#FFFFFF">
       <rect x="391" y="88" width="8" height="8" rx="2"/>
       <rect x="391" y="104" width="8" height="8" rx="2"/>
@@ -155,11 +155,11 @@
     <text x="395" y="185" font-family="system-ui, -apple-system, sans-serif" font-size="16" font-weight="700" fill="#FFFFFF" text-anchor="middle">.zip.001</text>
   </g>
   
-  <!-- 分片 2 (橙色 - 中间) -->
+  <!-- 分片 2 (中蓝 - 中间) -->
   <g filter="url(#softShadow)">
     <rect x="340" y="211" width="110" height="90" rx="12" fill="url(#zipGrad2)"/>
     <!-- 拉链效果 -->
-    <rect x="387" y="211" width="16" height="90" fill="#B45309" opacity="0.25"/>
+    <rect x="387" y="211" width="16" height="90" fill="#1a5276" opacity="0.25"/>
     <g fill="#FFFFFF">
       <rect x="391" y="219" width="8" height="8" rx="2"/>
       <rect x="391" y="235" width="8" height="8" rx="2"/>
@@ -171,11 +171,11 @@
     <text x="395" y="316" font-family="system-ui, -apple-system, sans-serif" font-size="16" font-weight="700" fill="#FFFFFF" text-anchor="middle">.zip.002</text>
   </g>
   
-  <!-- 分片 3 (粉红 - 底部) -->
+  <!-- 分片 3 (深蓝 - 底部) -->
   <g filter="url(#softShadow)">
     <rect x="340" y="342" width="110" height="90" rx="12" fill="url(#zipGrad3)"/>
     <!-- 拉链效果 -->
-    <rect x="387" y="342" width="16" height="90" fill="#9D174D" opacity="0.25"/>
+    <rect x="387" y="342" width="16" height="90" fill="#1a5276" opacity="0.25"/>
     <g fill="#FFFFFF">
       <rect x="391" y="350" width="8" height="8" rx="2"/>
       <rect x="391" y="366" width="8" height="8" rx="2"/>
