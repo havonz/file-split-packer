@@ -24,6 +24,7 @@ type SplitResult = {
   outputFiles: string[];
   isDir: boolean;
   baseName: string;
+  partSha256s: { path: string; sha256: string }[];
 };
 
 type RestoreResult = {
@@ -476,9 +477,12 @@ function App() {
       return;
     }
     const baseName = extractName(inputPath());
-    const overwriteDecision = await ensurePartsDir(baseName, resolvedOutput);
-    if (!overwriteDecision.proceed) {
-      return;
+    let overwriteDecision = { proceed: true, overwrite: false };
+    if (outputDir()) {
+      overwriteDecision = await ensurePartsDir(baseName, resolvedOutput);
+      if (!overwriteDecision.proceed) {
+        return;
+      }
     }
 
     const payload = {
@@ -506,8 +510,11 @@ function App() {
       const baseName = result.baseName || extractName(inputPath());
       const fileList = result.outputFiles.map((filePath) => {
         const relative = toRelative(filePath, resolvedOutput);
-        return `      XXT_SCRIPTS_PATH.."/${escapeLuaString(relative)}",`;
+        return `  XXT_SCRIPTS_PATH.."/${escapeLuaString(relative)}",`;
       });
+      const sha256Map = new Map(
+        (result.partSha256s || []).map((item) => [item.path, item.sha256])
+      );
       const passwordValue = password().trim();
       const outputName = result.isDir ? `${baseName}.zip` : baseName;
       const outputFileLine = `  output_file = XXT_SCRIPTS_PATH.."/${escapeLuaString(outputName)}",`;
@@ -515,13 +522,39 @@ function App() {
         'local merge_parts = require("merge_parts")',
         "",
         `-- ${packMode() === "split-then-zip" ? "split-then-zip" : "zip-then-split"}`,
+        "local file_list = {",
+        ...fileList,
+        "}",
+      ];
+      if (
+        packMode() === "split-then-zip" &&
+        result.partSha256s &&
+        result.partSha256s.length === result.outputFiles.length
+      ) {
+        const sha256Lines = result.outputFiles.map((filePath) => {
+          const sha256Value = sha256Map.get(filePath) || "";
+          return `  "${sha256Value}",`;
+        });
+        scriptLines.push(
+          "",
+          "-- SHA256 校验",
+          "local part_sha256 = {",
+          ...sha256Lines,
+          "}",
+          "local failed = merge_parts.verify_parts(file_list, part_sha256)",
+          "if #failed > 0 then",
+          '  nLog("分包校验失败", failed)',
+          "  return",
+          "end"
+        );
+      }
+      scriptLines.push(
+        "",
         "local ok, out = merge_parts.restore({",
         `  mode = "${packMode()}",`,
-        "  file_list = {",
-        ...fileList,
-        "  },",
+        "  file_list = file_list,",
         outputFileLine,
-      ];
+      );
       if (passwordValue) {
         scriptLines.push(`  password = "${escapeLuaString(passwordValue)}",`);
       }
@@ -660,13 +693,17 @@ function App() {
   const downloadLuaModule = async () => {
     try {
       const { save } = await import("@tauri-apps/plugin-dialog");
-      const { writeTextFile } = await import("@tauri-apps/plugin-fs");
       const targetPath = await save({
         title: "保存 merge_parts.lua",
         defaultPath: "merge_parts.lua",
       });
       if (!targetPath) return;
-      await writeTextFile(targetPath, mergePartsLua);
+      await invoke("save_text_file", {
+        options: {
+          targetPath,
+          content: mergePartsLua,
+        },
+      });
       setCopyHint("已保存");
     } catch (err) {
       setCopyHint("保存失败");

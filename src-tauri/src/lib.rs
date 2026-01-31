@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::{
     cmp,
     collections::HashMap,
@@ -38,6 +39,14 @@ struct SplitResult {
     output_files: Vec<String>,
     is_dir: bool,
     base_name: String,
+    part_sha256s: Vec<PartSha256>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PartSha256 {
+    path: String,
+    sha256: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -56,6 +65,13 @@ struct RestoreResult {
     merged_file: Option<String>,
     extracted_dir: Option<String>,
     output_files: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SaveTextOptions {
+    target_path: String,
+    content: String,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -83,6 +99,11 @@ async fn restore_parts(app: AppHandle, options: RestoreOptions) -> Result<Restor
     tauri::async_runtime::spawn_blocking(move || restore_parts_blocking(&app, options))
         .await
         .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+fn save_text_file(options: SaveTextOptions) -> Result<(), String> {
+    fs::write(&options.target_path, options.content).map_err(|e| e.to_string())
 }
 
 fn process_file_blocking(app: &AppHandle, options: SplitOptions) -> Result<SplitResult, String> {
@@ -270,11 +291,14 @@ fn split_then_zip(
         let _ = fs::remove_file(path);
     }
 
+    let part_sha256s = compute_part_sha256s(&output_files)?;
+
     Ok(SplitResult {
         parts,
         output_files,
         is_dir,
         base_name,
+        part_sha256s,
     })
 }
 
@@ -609,7 +633,35 @@ fn zip_then_split(
         output_files,
         is_dir,
         base_name,
+        part_sha256s: Vec::new(),
     })
+}
+
+fn compute_part_sha256s(paths: &[String]) -> Result<Vec<PartSha256>, String> {
+    let mut results = Vec::with_capacity(paths.len());
+    for path in paths {
+        let sha256 = compute_file_sha256(Path::new(path))
+            .map_err(|err| format!("计算 SHA256 失败: {} ({})", path, err))?;
+        results.push(PartSha256 {
+            path: path.clone(),
+            sha256,
+        });
+    }
+    Ok(results)
+}
+
+fn compute_file_sha256(path: &Path) -> Result<String, String> {
+    let mut file = File::open(path).map_err(|e| e.to_string())?;
+    let mut hasher = Sha256::new();
+    let mut buffer = vec![0u8; 8 * 1024 * 1024];
+    loop {
+        let read_len = file.read(&mut buffer).map_err(|e| e.to_string())?;
+        if read_len == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read_len]);
+    }
+    Ok(format!("{:x}", hasher.finalize()))
 }
 
 fn compute_parts(
@@ -1359,7 +1411,11 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![process_file, restore_parts])
+        .invoke_handler(tauri::generate_handler![
+            process_file,
+            restore_parts,
+            save_text_file
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
